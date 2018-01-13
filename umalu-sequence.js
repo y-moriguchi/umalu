@@ -31,6 +31,7 @@
 		fontFamily: "sans-serif",
 		stroke: "#B0193D",
 		fill: "#FEFDD2",
+		strokeDasharray: 5,
 		arrowMargin: 10,
 		arrowSize: 6,
 		fragmentMargin: 8,
@@ -94,6 +95,8 @@
 		this.markNote = 0;
 		this.markNoteLeft = 0;
 		this.markNoteEnd = 0;
+		this.markInvalid = false;
+		this.markSelfPos = false;
 	}
 	Cell.prototype.getChar = function() {
 		return this._string;
@@ -367,10 +370,19 @@
 		if(quadro.getProp("markLiveBar") &&
 				!quadro.getProp("markFragment") &&
 				!quadro.getProp("markNote") &&
+				!quadro.getProp("markInvalid") &&
 				quadro.check("-", "r")) {
 			quadro.callFrom = quadro.getProp("markActorNumber");
 			quadro.right();
 			return states.scanArrow;
+		} else if(quadro.getProp("markLiveBar") &&
+				!quadro.getProp("markFragment") &&
+				!quadro.getProp("markNote") &&
+				!quadro.getProp("markInvalid") &&
+				quadro.check("<", "r")) {
+			quadro.callFrom = quadro.getProp("markActorNumber");
+			quadro.right();
+			return states.scanResponse;
 		} else if(quadro.check(LABEL_CORNER) &&
 				!quadro.getProp("markActorNumber") &&
 				isFragment(quadro)) {
@@ -485,6 +497,9 @@
 		});
 		quadro.down();
 		while(!quadro.getProp("markNoteEnd")) {
+			if(!quadro.isInBound()) {
+				throw new Error("Parse Error");
+			}
 			quadro.right();
 			quadro.repeatUntil(function(cell) { opt.debuglog(cell); return cell.markNote; }, "r", function(cell) {
 				text += cell.getChar();
@@ -521,12 +536,70 @@
 			quadro.messageText = "";
 			quadro.right();
 			return states.scanMessage;
-//		} else if(quadro.check("|", "d")) {
-//			quadro.pushPosition(states.scanMessage, "r");
-//			return state.scanArrowSelf;
+		} else if(quadro.check("|", "d") && !quadro.getProp("markLiveBar")) {
+			quadro.pushPosition(states.scanMessage, "r");
+			return states.scanArrowSelf;
 		} else {
 			quadro.right();
 			return states.scanArrow;
+		}
+	};
+	states.scanArrowSelf = function scanArrowSelf(quadro) {
+		quadro.down().repeatWhile("|", "d", function() {});
+		if(quadro.messageText === "") {
+			quadro.pushPosition(states.scanArrowSelf3, "l");
+			return states.scanArrowSelf2;
+		} else {
+			quadro.left();
+			return states.scanArrowSelf3;
+		}
+	};
+	states.scanArrowSelf2 = function scanArrowSelf2(quadro) {
+		do {
+			quadro.setProp("markSelfPos", true);
+			for(quadro.right(); !quadro.getProp("markLiveBar"); quadro.right()) {
+				if(!quadro.isInBound()) {
+					throw new Error("Parse Error");
+				}
+				if(quadro.check(MESSAGE_TEXT)) {
+					quadro.setProp("markTextStart", true, "d");
+					return states.scanArrowText;
+				}
+			}
+			quadro.repeatUntil(function(cell) { return cell.markSelfPos; }, "l", function() {});
+			quadro.setProp("markSelfPos", false);
+		} while(quadro.up().check("|"));
+		return quadro.returnPosition();
+	};
+	states.scanArrowSelf3 = function scanArrowSelf3(quadro) {
+		while(!(quadro.getProp("markLiveBar", "l") && quadro.check("<"))) {
+			if(!quadro.isInBound()) {
+				throw new Error("Parse Error");
+			}
+			quadro.left();
+		}
+		quadro.setProp("markInvalid", true);
+		quadro.left().setProp("markInvalid", true);
+		quadro.messageArrows.push(new Message(quadro.callFrom, quadro.callFrom, trim(quadro.messageText)));
+		quadro.callFrom = null;
+		quadro.messageText = "";
+		return quadro.returnPosition();
+	};
+	states.scanResponse = function scanResponse(quadro) {
+		var num;
+		if(quadro.messageText === "" && quadro.check(MESSAGE_TEXT, "u")) {
+			quadro.setProp("markTextStart", true);
+			quadro.pushPosition(states.scanResponse, "r");
+			quadro.up();
+			return states.scanArrowText;
+		} else if(quadro.check("|") && (num = quadro.getProp("markActorNumber"))) {
+			quadro.messageArrows.push(new Response(quadro.callFrom, num, trim(quadro.messageText)));
+			quadro.callFrom = null;
+			quadro.messageText = "";
+			return states.scanMessage;
+		} else {
+			quadro.right();
+			return states.scanResponse;
 		}
 	};
 	states.scanArrowText = function scanArrowText(quadro) {
@@ -539,7 +612,7 @@
 		if(quadro.getProp("markTextStart")) {
 			quadro.setProp("markTextStart", false);
 			quadro.right();
-			return states.scanArrow;
+			return quadro.returnPosition();
 		} else {
 			quadro.pushPosition(states.scanArrowText2, "d");
 			return states.scanArrowText3;
@@ -619,6 +692,11 @@
 		this.labelName = "";
 	}
 	function Message(callFrom, callTo, message) {
+		this.callFrom = callFrom;
+		this.callTo = callTo;
+		this.message = message;
+	}
+	function Response(callFrom, callTo, message) {
 		this.callFrom = callFrom;
 		this.callTo = callTo;
 		this.message = message;
@@ -817,6 +895,38 @@
 				this.canvas.appendChild(arrow);
 				this.canvas.appendChild(arrowHead);
 			};
+			function ResponseArrow(canvas, messageElement, actorFrom, actorTo) {
+				this.canvas = canvas;
+				this.messageElement = messageElement;
+				this.actorFrom = actorFrom;
+				this.actorTo = actorTo;
+				this.x = null;
+				this.y = null;
+			}
+			ResponseArrow.prototype.drawSvg = function(y) {
+				var arrow,
+					arrowHead,
+					points2 = "";
+				this.x = this.actorFrom.xLifeline;
+				this.y = y - this.messageElement.height;
+				this.messageElement.drawSvg(this.actorFrom.xLifeline + opt.arrowMargin, this.y);
+				arrowHead = createNode("polygon");
+				arrow = createNode("line");
+				arrow.setAttribute("x1", this.actorFrom.xLifeline);
+				arrow.setAttribute("y1", y);
+				arrow.setAttribute("x2", this.actorTo.xLifeline);
+				arrow.setAttribute("y2", y);
+				arrow.setAttribute("stroke", opt.stroke);
+				arrow.setAttribute("stroke-dasharray", opt.strokeDasharray);
+				points2 += this.actorFrom.xLifeline + "," + y + " ";
+				points2 += (this.actorFrom.xLifeline + opt.arrowSize) + "," + (y - opt.arrowSize / 2) + " ";
+				points2 += (this.actorFrom.xLifeline + opt.arrowSize) + "," + (y + opt.arrowSize / 2);
+				arrowHead.setAttribute("points", points2);
+				arrowHead.setAttribute("fill", opt.fill);
+				arrowHead.setAttribute("stroke", opt.stroke);
+				this.canvas.appendChild(arrow);
+				this.canvas.appendChild(arrowHead);
+			};
 			function FragmentBox(canvas, type, condition) {
 				this.canvas = canvas;
 				this.type = type;
@@ -901,6 +1011,11 @@
 								obj.computeSizeSvg();
 								xNext = max(xNext, obj.width);
 								objects[j][k] = new Arrow(canvas, obj, actorBoxes[part.callFrom], actorBoxes[part.callTo]);
+							} else if(part instanceof Response && i === part.callFrom) {
+								obj = new MessageBox(canvas, trim(part.message));
+								obj.computeSizeSvg();
+								xNext = max(xNext, obj.width);
+								objects[j][k] = new ResponseArrow(canvas, obj, actorBoxes[part.callFrom], actorBoxes[part.callTo]);
 							} else if(part instanceof FragmentStart && i === part.startX) {
 								obj = objects[j][k] = new FragmentBox(canvas, trim(part.type), trim(part.condition));
 								obj.computeLabelSizeSvg();
@@ -943,8 +1058,11 @@
 					yMargin = opt.boxMargin;
 					for(k = 0; k < quadro.messageArrowsList[j].length; k++) {
 						part = quadro.messageArrowsList[j][k];
-						if(part instanceof Message) {
+						if(part instanceof Message || part instanceof Response) {
 							msgheight = objects[j][k].messageElement.height;
+							if(part.callFrom === part.callTo) {
+								yMargin = max(yMargin, opt.boxMargin * 2);
+							}
 						} else if(part instanceof Note) {
 							msgheight = objects[j][k].height / 2;
 							yMargin = max(yMargin, msgheight);
@@ -957,7 +1075,7 @@
 					}
 					for(k = 0; k < quadro.messageArrowsList[j].length; k++) {
 						part = quadro.messageArrowsList[j][k];
-						if(part instanceof Message) {
+						if(part instanceof Message || part instanceof Response) {
 							objects[j][k].drawSvg(y + yNext);
 						} else if(part instanceof Note) {
 							observables.push(bind(
