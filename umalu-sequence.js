@@ -19,6 +19,7 @@
 		MESSAGE_TEXT = /[^\s\-]/,
 		defaultOptions,
 		opt,
+		fragments = [],
 		fragmentId = 10000,
 		noteId = 20000;
 	defaultOptions = {
@@ -35,7 +36,8 @@
 		arrowMargin: 10,
 		arrowSize: 6,
 		fragmentMargin: 8,
-		noteSize: 8
+		noteSize: 8,
+		fragmentNestMargin: 4
 	};
 	opt = defaultOptions;
 	function extend(base, extension) {
@@ -97,6 +99,7 @@
 		this.markNoteEnd = 0;
 		this.markInvalid = false;
 		this.markSelfPos = false;
+		this.markTextRead = false;
 	}
 	Cell.prototype.getChar = function() {
 		return this._string;
@@ -201,6 +204,11 @@
 		var cmpx = (x === void(0)) ? this._x : x,
 			cmpy = (y === void(0)) ? this._y : y;
 		return cmpx >= 0 && cmpx < this._xBound && cmpy >= 0 && cmpy < this._yBound;
+	};
+	Quadro.prototype.checkInBound = function(x, y) {
+		if(!this.isInBound(x, y)) {
+			throw new Error("Parse Error");
+		}
 	};
 	Quadro.prototype.getDirectionXY = function(direction) {
 		var x = this._x,
@@ -426,7 +434,9 @@
 		}
 	};
 	states.scanFragment = function scanFragment(quadro) {
-		var scanActor = quadro.scanActor;
+		var scanActor = quadro.scanActor,
+			textState = "INIT",
+			spaceFlag = false;
 		quadro.right();
 		quadro.repeatWhile("-", "r", function(cell) {
 			cell.markFragment = fragmentId;
@@ -456,13 +466,37 @@
 			quadro.messageArrows[quadro.messageArrows.length - 1].type += cell.getChar();
 		});
 		quadro.right();
-		quadro.repeatUntil("[", "r", function() {});
-		quadro.right();
-		quadro.messageArrows[quadro.messageArrows.length - 1].condition += "[";
-		quadro.repeatUntil("]", "r", function(cell) {
-			quadro.messageArrows[quadro.messageArrows.length - 1].condition += cell.getChar();
-		});
-		quadro.messageArrows[quadro.messageArrows.length - 1].condition += "]";
+		outer: while(!quadro.getProp("markFragment")) {
+			switch(textState) {
+			case "INIT":
+				if(quadro.check(MESSAGE_TEXT) && !quadro.getProp("markLiveBar")) {
+					textState = "TEXT";
+				} else {
+					quadro.right();
+				}
+				break;
+			case "TEXT":
+				if(quadro.check(/\s/) || quadro.getProp("markLiveBar")) {
+					textState = "SPACE";
+				} else {
+					quadro.messageArrows[quadro.messageArrows.length - 1].condition += quadro.getChar();
+					quadro.setProp("markTextRead", true);
+				}
+				quadro.right();
+				break;
+			case "SPACE":
+				if(quadro.check(/\s/) || quadro.getProp("markLiveBar")) {
+					break outer;
+				} else {
+					quadro.messageArrows[quadro.messageArrows.length - 1].condition += " ";
+					quadro.setProp("markTextRead", true, "l");
+					textState = "TEXT";
+				}
+				break;
+			default:
+				throw new Error("Internal Error");
+			}
+		}
 		quadro.repeatUntil(function(cell) { return cell.markFragment; }, "l", function() {});
 		quadro.up().right();
 		return states.scanMessage;
@@ -497,9 +531,7 @@
 		});
 		quadro.down();
 		while(!quadro.getProp("markNoteEnd")) {
-			if(!quadro.isInBound()) {
-				throw new Error("Parse Error");
-			}
+			quadro.checkInBound();
 			quadro.right();
 			quadro.repeatUntil(function(cell) { opt.debuglog(cell); return cell.markNote; }, "r", function(cell) {
 				text += cell.getChar();
@@ -603,7 +635,10 @@
 		}
 	};
 	states.scanArrowText = function scanArrowText(quadro) {
-		quadro.repeatWhile(MESSAGE_TEXT, "u", function() {});
+		function testChar(cell) {
+			return !cell.markTextRead && MESSAGE_TEXT.test(cell.getChar());
+		}
+		quadro.repeatWhile(testChar, "u", function() {});
 		quadro.down();
 		quadro.pushPosition(states.scanArrowText2, "d");
 		return states.scanArrowText3;
@@ -712,9 +747,12 @@
 		this.startX = startX;
 		this.endX = null;
 		this.id = ++fragmentId;
+		fragments[this.id] = this;
 	}
-	function FragmentEnd(fragmentId) {
+	function FragmentEnd(fragmentId, startX) {
 		this.id = fragmentId;
+		this.startX = fragments[fragmentId].startX;
+		this.endX = fragments[fragmentId].endX;
 	}
 	if(global.window && global.window.document) {
 		(function() {
@@ -982,6 +1020,9 @@
 					obj,
 					widthsX = [],
 					xActor = [],
+					fragmentNest = [],
+					fragmentDepth = [],
+					fragmentMaxDepth = [],
 					observables = [],
 					x = opt.boxMargin,
 					y = opt.boxMargin,
@@ -990,6 +1031,7 @@
 					yNext = 0,
 					yMargin,
 					msgheight,
+					fragmentMargin,
 					i,
 					j,
 					k,
@@ -1001,7 +1043,46 @@
 					yNext = yNext < actorBoxes[i].height ? actorBoxes[i].height : yNext;
 				}
 				for(i = 1; i < quadro.actors.length; i++) {
-					xNext = actorBoxes[i].width / 2 + (i > 1 ? actorBoxes[i - 1].width / 2 + opt.boxMargin : 0);
+					if(fragmentMaxDepth[i] === void 0) {
+						fragmentMaxDepth[i] = 0;
+					}
+					for(j = 0; j < quadro.messageArrowsList.length; j++) {
+						fragmentNest[j] = fragmentNest[j] || [];
+						for(k = 0; k < quadro.messageArrowsList[j].length; k++) {
+							part = quadro.messageArrowsList[j][k];
+							if(part instanceof FragmentStart && (i === part.startX || i === part.endX)) {
+								if(!fragmentDepth[i]) {
+									fragmentDepth[i] = {
+										depth: 1,
+										current: 1
+									};
+								} else {
+									fragmentDepth[i].current++;
+									fragmentDepth[i].depth = max(fragmentDepth[i].depth, fragmentDepth[i].current);
+								}
+								fragmentMaxDepth[i] = max(fragmentMaxDepth[i], fragmentDepth[i].depth);
+								fragmentNest[j][k] = {
+									depth: fragmentDepth[i],
+									current: fragmentDepth[i].current
+								};
+							} else if(part instanceof FragmentEnd && (i === part.startX || i === part.endX)) {
+								if(fragmentDepth[i].current > 1) {
+									fragmentDepth[i].current--;
+								} else {
+									fragmentDepth[i] = null;
+								}
+							} else if(fragmentDepth[i] && (i === part.startX || i === part.endX)) {
+								fragmentNest[j][k] = {
+									depth: fragmentDepth[i],
+									current: fragmentDepth[i].current
+								};
+							}
+						}
+					}
+				}
+				for(i = 1; i < quadro.actors.length; i++) {
+					xNext = max(actorBoxes[i].width / 2, (fragmentMaxDepth[i] - 1) * opt.fragmentNestMargin + opt.boxMargin);
+					xNext += i > 1 ? actorBoxes[i - 1].width / 2 + opt.boxMargin : 0;
 					for(j = 0; j < quadro.messageArrowsList.length; j++) {
 						objects[j] = objects[j] || [];
 						for(k = 0; k < quadro.messageArrowsList[j].length; k++) {
@@ -1029,8 +1110,8 @@
 								obj = objects[j][k] = new NoteBox(canvas, trim(part.text));
 								obj.computeSizeSvg();
 								widthsX.push({
-									start: part.startX - 1,
-									end: part.endX,
+									start: part.startX,
+									end: part.endX + 1,
 									width: obj.width
 								});
 							}
@@ -1075,18 +1156,23 @@
 					}
 					for(k = 0; k < quadro.messageArrowsList[j].length; k++) {
 						part = quadro.messageArrowsList[j][k];
+						if(fragmentNest[j][k]) {
+							fragmentMargin = opt.fragmentNestMargin * (fragmentNest[j][k].depth.depth - fragmentNest[j][k].current);
+						} else {
+							fragmentMargin = -opt.fragmentNestMargin;
+						}
 						if(part instanceof Message || part instanceof Response) {
 							objects[j][k].drawSvg(y + yNext);
 						} else if(part instanceof Note) {
 							observables.push(bind(
 									function(obj, x, y) { obj.drawSvg(x, y); },
 									objects[j][k],
-									actorBoxes[part.startX].xLifeline + opt.boxMargin,
+									actorBoxes[part.startX].xLifeline + opt.boxMargin + opt.fragmentNestMargin + fragmentMargin,
 									y + yNext - objects[j][k].height / 2));
 						} else if(part instanceof FragmentStart) {
 							objects[j][k].setStartSvg(
-									actorBoxes[part.startX].xLifeline - objects[j][k].typeWidth - opt.boxMargin,
-									actorBoxes[part.endX - 1].xLifeline + opt.boxMargin,
+									actorBoxes[part.startX].xLifeline - objects[j][k].typeWidth - opt.boxMargin - fragmentMargin,
+									actorBoxes[part.endX - 1].xLifeline + opt.boxMargin + fragmentMargin,
 									y);
 							objectRef[part.id] = objects[j][k];
 						} else if(part instanceof FragmentEnd) {
