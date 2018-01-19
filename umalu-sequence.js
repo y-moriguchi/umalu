@@ -36,8 +36,9 @@
 		arrowMargin: 10,
 		arrowSize: 6,
 		fragmentMargin: 8,
-		noteSize: 8,
-		fragmentNestMargin: 4
+		fragmentNestMargin: 4,
+		fragmentFill: "#BBBBBB",
+		noteSize: 8
 	};
 	opt = defaultOptions;
 	function extend(base, extension) {
@@ -554,12 +555,7 @@
 	};
 	states.scanArrow = function scanArrow(quadro) {
 		var num;
-		if(quadro.messageText === "" && quadro.check(MESSAGE_TEXT, "u")) {
-			quadro.setProp("markTextStart", true);
-			quadro.pushPosition(states.scanArrow, "r");
-			quadro.up();
-			return states.scanArrowText;
-		} else if(quadro.check(">")) {
+		if(quadro.check(">")) {
 			if(!(num = quadro.getProp("markActorNumber", "r"))) {
 				throw new Error("Parse Error");
 			}
@@ -571,6 +567,11 @@
 		} else if(quadro.check("|", "d") && !quadro.getProp("markLiveBar")) {
 			quadro.pushPosition(states.scanMessage, "r");
 			return states.scanArrowSelf;
+		} else if(quadro.messageText === "" && quadro.check(MESSAGE_TEXT, "u")) {
+			quadro.setProp("markTextStart", true);
+			quadro.pushPosition(states.scanArrow, "r");
+			quadro.up();
+			return states.scanArrowText;
 		} else {
 			quadro.right();
 			return states.scanArrow;
@@ -619,16 +620,16 @@
 	};
 	states.scanResponse = function scanResponse(quadro) {
 		var num;
-		if(quadro.messageText === "" && quadro.check(MESSAGE_TEXT, "u")) {
-			quadro.setProp("markTextStart", true);
-			quadro.pushPosition(states.scanResponse, "r");
-			quadro.up();
-			return states.scanArrowText;
-		} else if(quadro.check("|") && (num = quadro.getProp("markActorNumber"))) {
+		if(quadro.check("|") && (num = quadro.getProp("markActorNumber"))) {
 			quadro.messageArrows.push(new Response(quadro.callFrom, num, trim(quadro.messageText)));
 			quadro.callFrom = null;
 			quadro.messageText = "";
 			return states.scanMessage;
+		} else if(quadro.messageText === "" && quadro.check(MESSAGE_TEXT, "u")) {
+			quadro.setProp("markTextStart", true);
+			quadro.pushPosition(states.scanResponse, "r");
+			quadro.up();
+			return states.scanArrowText;
 		} else {
 			quadro.right();
 			return states.scanResponse;
@@ -983,10 +984,12 @@
 			}
 			FragmentBox.prototype.computeLabelSizeSvg = function() {
 				var bbox,
-					points = "";
-				this._type = createTextSvg(this.canvas, this.type, 0, 0);
-				this.typeWidth = this._type.getBBox().width + opt.fragmentMargin * 2;
-				this.typeHeight = this._type.getBBox().height;
+					points = "",
+					typeText;
+				typeText = createTextSvg(this.canvas, this.type, 0, 0);
+				this.typeWidth = typeText.getBBox().width + opt.fragmentMargin * 2;
+				this.typeHeight = typeText.getBBox().height;
+				this.canvas.removeChild(typeText);
 				this._condition = createTextSvg(this.canvas, this.condition, 0, 0);
 				this.conditionWidth = this._condition.getBBox().width;
 				this.conditionHeight = this._condition.getBBox().height;
@@ -998,8 +1001,8 @@
 				this.y = startY;
 			};
 			FragmentBox.prototype.drawSvg = function(endY) {
-				this._type.setAttribute("x", this.x + opt.fragmentMargin);
-				this._type.setAttribute("y", this.y);
+				var typeBox,
+					points = "";
 				this._condition.setAttribute("x", this.x + this.typeWidth + opt.boxMargin * 2);
 				this._condition.setAttribute("y", this.y);
 				this._box = createNode("rect");
@@ -1010,6 +1013,19 @@
 				this._box.setAttribute("width", this.width);
 				this._box.setAttribute("height", endY - this.y);
 				this.canvas.appendChild(this._box);
+				typeBox = createNode("polygon");
+				points += this.x + "," + this.y + " ";
+				points += (this.x + this.typeWidth + opt.fragmentMargin) + "," + this.y + " ";
+				points += (this.x + this.typeWidth) + "," + (this.y + this.typeHeight) + " ";
+				points += this.x + "," + (this.y + this.typeHeight) + " ";
+				points += this.x + "," + this.y;
+				typeBox.setAttribute("points", points);
+				typeBox.setAttribute("fill", opt.fragmentFill);
+				typeBox.setAttribute("stroke", opt.stroke);
+				this.canvas.appendChild(typeBox);
+				this._type = createTextSvg(this.canvas, this.type, 0, 0);
+				this._type.setAttribute("x", this.x + opt.fragmentMargin);
+				this._type.setAttribute("y", this.y);
 			};
 			function drawSequenceDiagram(quadro) {
 				var canvas,
@@ -1130,7 +1146,7 @@
 				for(i = 1; i < quadro.actors.length; i++) {
 					actorBoxes[i].resetXY(xActor[i], y);
 				}
-				x += actorBoxes[i - 1].width + opt.boxMargin;
+				x += actorBoxes[i - 1].width + max(opt.boxMargin, widthsX[i].width);
 				y += yNext;
 				yMargin = opt.boxMargin;
 				for(j = 0; j < quadro.messageArrowsList.length; j++) {
