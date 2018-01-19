@@ -1146,7 +1146,7 @@
 				for(i = 1; i < quadro.actors.length; i++) {
 					actorBoxes[i].resetXY(xActor[i], y);
 				}
-				x += actorBoxes[i - 1].width + max(opt.boxMargin, widthsX[i].width);
+				x += actorBoxes[i - 1].width + max(opt.boxMargin, widthsX[i] ? widthsX[i].width : 0);
 				y += yNext;
 				yMargin = opt.boxMargin;
 				for(j = 0; j < quadro.messageArrowsList.length; j++) {
