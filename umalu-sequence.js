@@ -19,7 +19,8 @@
 		MESSAGE_TEXT = /[^\s\-]/,
 		defaultOptions,
 		opt,
-		fragments = [],
+		twoBytesStr = '',
+		TWOBYTES,
 		fragmentId = 10000,
 		noteId = 20000;
 	defaultOptions = {
@@ -41,6 +42,19 @@
 		noteSize: 8
 	};
 	opt = defaultOptions;
+	if(opt.greekBytes === 2) {
+		twoBytesStr += '\u0391-\u03A9\u03b1-\u03c1\u03c3-\u03c9';
+	}
+	if(opt.mathBytes === 2) {
+		twoBytesStr += '\u00ac\u00b1\u00d7\u00f7' +
+			'\u2020\u2021\u2026' +
+			'\u2200\u2202\u2203\u2205\u2207-\u2209\u220b\u2212\u2213\u221d-\u2220\u2225-\u222c\u222e' +
+			'\u2234\u2235\u223d\u2243\u2245\u2248\u2252\u2260-\u2262\u2266\u2267\u226a\u226b\u2276\u2277' +
+			'\u2282-\u2287\u228a\u228b\u2295-\u2297\u22a5\u22bf\u22da\u22db\u2605\u2606' +
+			'\u29bf\uff01-\uff60\uffe0-\uffe6';
+	}
+	twoBytesStr += '\u2e80-\u2eff\u3000-\u30ff\u3300-\u4dbf\u4e00-\u9fff\uac00-\ud7af\uf900-\ufaff\ufe30-\ufe4f';
+	TWOBYTES = new RegExp('[' + twoBytesStr + ']');
 	function extend(base, extension) {
 		var i, res = {};
 		for(i in base) {
@@ -56,7 +70,7 @@
 		return res;
 	}
 	function trim(string) {
-		return string.replace(/^\s+|\s+$/g, "");
+		return string.replace(/^\s+|\s+$/g, "").replace(/\u0001/, "");
 	}
 	function max() {
 		var i,
@@ -75,6 +89,16 @@
 		return function() {
 			return func.apply(null, args);
 		};
+	}
+	function quadroLength(str) {
+		var xLen = 0, j;
+		for(j = 0; j < str.length; j++) {
+			xLen += isTwoBytes(str.charAt(j)) ? 2 : 1;
+		}
+		return xLen;
+	}
+	function isTwoBytes(ch) {
+		return TWOBYTES.test(ch);
 	}
 	function engine(quadro, initState) {
 		var state = initState,
@@ -127,19 +151,23 @@
 		this.canvas = null;
 		this.scanActor = 0;
 		this.notes = [];
+		this.fragments = [],
 		split = input.split(/\r?\n/);
 		this._xBound = 0;
 		this._yBound = split.length;
 		for(i = 0; i < split.length; i++) {
-			this._xBound = this._xBound < split[i].length ? split[i].length : this._xBound;
+			this._xBound = max(this._xBound, quadroLength(split[i]));
 		}
 		for(i = 0; i < split.length; i++) {
 			this._quadro.push([]);
 			for(j = 0; j < this._xBound; j++) {
-				if(j < split[i].length) {
-					this._quadro[i].push(new Cell(split[i].charAt(j)));
-				} else {
+				if(j >= split[i].length) {
 					this._quadro[i].push(new Cell(" "));
+				} else if(isTwoBytes(split[i].charAt(j))) {
+					this._quadro[i].push(new Cell(split[i].charAt(j)));
+					this._quadro[i].push(new Cell("\u0001"));
+				} else {
+					this._quadro[i].push(new Cell(split[i].charAt(j)));
 				}
 			}
 		}
@@ -376,6 +404,7 @@
 		}
 	};
 	states.scanMessage = function scanMessage(quadro) {
+		var fragment;
 		if(quadro.getProp("markLiveBar") &&
 				!quadro.getProp("markFragment") &&
 				!quadro.getProp("markNote") &&
@@ -395,7 +424,9 @@
 		} else if(quadro.check(LABEL_CORNER) &&
 				!quadro.getProp("markActorNumber") &&
 				isFragment(quadro)) {
-			quadro.messageArrows.push(new FragmentStart(quadro.scanActor + 1));
+			fragment = new FragmentStart(quadro.scanActor + 1);
+			quadro.messageArrows.push(fragment);
+			quadro.fragments[fragment.id] = fragment;
 			quadro.setProp("markFragment", fragmentId);
 			return states.scanFragment;
 		} else if(quadro.check(LABEL_CORNER) &&
@@ -405,7 +436,8 @@
 			quadro.pushPosition(states.scanMessage, "r");
 			return states.scanNote;
 		} else if(quadro.getProp("markFragmentEnd")) {
-			quadro.messageArrows.push(new FragmentEnd(quadro.getProp("markFragmentEnd")));
+			fragment = quadro.fragments[quadro.getProp("markFragmentEnd")];
+			quadro.messageArrows.push(new FragmentEnd(fragment));
 			quadro.right();
 			return states.scanMessage;
 		} else if(quadro.getProp("markNoteLeft") &&
@@ -534,7 +566,7 @@
 		while(!quadro.getProp("markNoteEnd")) {
 			quadro.checkInBound();
 			quadro.right();
-			quadro.repeatUntil(function(cell) { opt.debuglog(cell); return cell.markNote; }, "r", function(cell) {
+			quadro.repeatUntil(function(cell) { return cell.markNote; }, "r", function(cell) {
 				text += cell.getChar();
 				cell.markNote = noteId;
 			});
@@ -748,12 +780,11 @@
 		this.startX = startX;
 		this.endX = null;
 		this.id = ++fragmentId;
-		fragments[this.id] = this;
 	}
-	function FragmentEnd(fragmentId, startX) {
-		this.id = fragmentId;
-		this.startX = fragments[fragmentId].startX;
-		this.endX = fragments[fragmentId].endX;
+	function FragmentEnd(fragmentStart) {
+		this.id = fragmentStart.id;
+		this.startX = fragmentStart.startX;
+		this.endX = fragmentStart.endX;
 	}
 	if(global.window && global.window.document) {
 		(function() {
@@ -846,7 +877,9 @@
 				return this;
 			};
 			NoteBox.prototype.drawSvg = function(x, y) {
-				var points1 = "";
+				var polyline2,
+					points1 = "",
+					points2 = "";
 				this.x = x;
 				this.y = y;
 				this._frameElement = createNode("polygon");
@@ -863,6 +896,14 @@
 				this._textElement = createTextSvg(this.canvas, this.text, 0, 0);
 				this._textElement.setAttribute("x", x + opt.noteSize);
 				this._textElement.setAttribute("y", y);
+				polyline2 = createNode("polyline");
+				points2 += (x + this.width) + "," + (y + opt.noteSize) + " ";
+				points2 += (x + this.width - opt.noteSize) + "," + (y + opt.noteSize) + " ";
+				points2 += (x + this.width - opt.noteSize) + "," + y;
+				polyline2.setAttribute("fill", "none");
+				polyline2.setAttribute("points", points2);
+				polyline2.setAttribute("stroke", opt.stroke);
+				this.canvas.appendChild(polyline2);
 			};
 			function MessageBox(canvas, text) {
 				this.canvas = canvas;
