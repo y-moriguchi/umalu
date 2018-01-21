@@ -445,6 +445,10 @@
 			quadro.messageArrows.push(quadro.notes[quadro.getProp("markNote")]);
 			quadro.pushPosition(states.scanMessage, "r");
 			return states.resetMarkNoteLeft;
+		} else if(quadro.getProp("markNoteEnd")) {
+			quadro.messageArrows.push(quadro.notes[quadro.getProp("markNote")]);
+			quadro.right();
+			return states.scanMessage;
 		} else if(quadro.isInBound()) {
 			if(quadro.getProp("markActorNumber")) {
 				quadro.scanActor = quadro.getProp("markActorNumber");
@@ -682,6 +686,7 @@
 			quadro.right();
 			return quadro.returnPosition();
 		} else {
+			quadro.messageText += "\n";
 			quadro.pushPosition(states.scanArrowText2, "d");
 			return states.scanArrowText3;
 		}
@@ -709,6 +714,7 @@
 		});
 		if(quadro.getDirection() === DIRECTION_UP) {
 			quadro.down().right();
+			quadro.actors[quadro.actorNumber].labelName = "";
 			return states.scanLabel;
 		} else if(quadro.getDirection() === DIRECTION_LEFT && quadro.check("|", "d")) {
 			quadro.setProp("markActorNumber", quadro.actorNumber);
@@ -728,7 +734,7 @@
 			quadro.repeatUntil(function(cell) { return cell.markActorNumber; }, "r", function(cell) {
 				labelLine += cell.getChar();
 			});
-			quadro.actors[quadro.actorNumber].labelName = trim(labelLine) + "\n";
+			quadro.actors[quadro.actorNumber].labelName += trim(labelLine) + "\n";
 			quadro.left();
 			quadro.repeatUntil(function(cell) { return cell.markActorNumber; }, "l", function() {});
 			quadro.down().right();
@@ -789,6 +795,64 @@
 	if(global.window && global.window.document) {
 		(function() {
 			var Umalu = {};
+			function MultiLineText(canvas, text, x, y, align, width, height) {
+				var split,
+					i,
+					bbox,
+					xNext,
+					yNext = y;
+				this.x = x;
+				this.y = y;
+				this.align = align;
+				this.texts = [];
+				if(width) {
+					this.size = {
+						width: width,
+						height: height
+					};
+				} else {
+					this.size = getSizeOfText(canvas, text);
+				}
+				split = text.split("\n");
+				for(i = 0; i < split.length; i++) {
+					this.texts[i] = createTextSvg(canvas, split[i], x, yNext);
+					bbox = this.texts[i].getBBox();
+					this.texts[i].setAttribute("x", this.alignX(bbox.width));
+					yNext += bbox.height;
+				}
+			}
+			MultiLineText.prototype.alignX = function(boxX) {
+				switch(this.align) {
+				case "center":  return this.x + (this.size.width - boxX) / 2;
+				case "left":    return this.x;
+				case "right":   return this.x + this.size.width - boxX;
+				default:        throw new Error("Internal Error");
+				}
+			};
+			MultiLineText.prototype.setAttribute = function(attr, value) {
+				var i,
+					bbox,
+					yNext;
+				switch(attr) {
+				case "x":
+					this.x = value;
+					for(i = 0; i < this.texts.length; i++) {
+						bbox = this.texts[i].getBBox();
+						this.texts[i].setAttribute(attr, this.alignX(bbox.width));
+					}
+					break;
+				case "y":
+					this.y = yNext = value;
+					for(i = 0; i < this.texts.length; i++) {
+						bbox = this.texts[i].getBBox();
+						this.texts[i].setAttribute(attr, yNext);
+						yNext += bbox.height;
+					}
+					break;
+				default:
+					throw new Error("Internal Error");
+				}
+			};
 			function createNode(type) {
 				return document.createElementNS("http://www.w3.org/2000/svg", type);
 			}
@@ -804,6 +868,26 @@
 				bboxText = element.getBBox();
 				element.setAttribute("dy", y - bboxText.y);
 				return element;
+			}
+			function getSizeOfText(canvas, text) {
+				var x = 0,
+					y = 0,
+					split,
+					text,
+					bboxText,
+					i;
+				split = text.split("\n");
+				for(i = 0; i < split.length; i++) {
+					text = createTextSvg(canvas, split[i], 0, 0);
+					bboxText = text.getBBox();
+					x = max(x, bboxText.width);
+					y += bboxText.height;
+					canvas.removeChild(text);
+				}
+				return {
+					width: x,
+					height: y
+				};
 			}
 			function ActorBox(canvas, text) {
 				this.canvas = canvas;
@@ -823,11 +907,9 @@
 					lifeline;
 				this.x = x;
 				this.y = y;
-				text = createTextSvg(this.canvas, this.text, x + opt.boxMargin, y + opt.boxMargin);
-				bboxText = text.getBBox();
+				bboxText = getSizeOfText(this.canvas, this.text);
 				this.width = bboxText.width + opt.boxMargin * 2;
 				this.height = bboxText.height + opt.boxMargin * 2;
-				this.canvas.removeChild(text);
 				this._box = createNode("rect");
 				this._box.setAttribute("x", x);
 				this._box.setAttribute("y", y);
@@ -836,7 +918,13 @@
 				this._box.setAttribute("width", this.width);
 				this._box.setAttribute("height", this.height);
 				this.canvas.appendChild(this._box);
-				this._text = createTextSvg(this.canvas, this.text, x + opt.boxMargin, y + opt.boxMargin);
+				this._text = new MultiLineText(this.canvas,
+						this.text,
+						x + opt.boxMargin,
+						y + opt.boxMargin,
+						"center",
+						bboxText.width,
+						bboxText.height);
 				this.xLifeline = this.x + this.width / 2
 			};
 			ActorBox.prototype.resetXY = function(x, y) {
@@ -870,10 +958,9 @@
 				this._frameElement = null;
 			}
 			NoteBox.prototype.computeSizeSvg = function() {
-				var text = createTextSvg(this.canvas, this.text, 0, 0);
-				this.width = text.getBBox().width + opt.noteSize * 3;
-				this.height = text.getBBox().height;
-				this.canvas.removeChild(text);
+				var bboxText = getSizeOfText(this.canvas, this.text);
+				this.width = bboxText.width + opt.noteSize * 3;
+				this.height = bboxText.height;
 				return this;
 			};
 			NoteBox.prototype.drawSvg = function(x, y) {
@@ -893,9 +980,7 @@
 				this._frameElement.setAttribute("points", points1);
 				this._frameElement.setAttribute("stroke", opt.stroke);
 				this.canvas.appendChild(this._frameElement);
-				this._textElement = createTextSvg(this.canvas, this.text, 0, 0);
-				this._textElement.setAttribute("x", x + opt.noteSize);
-				this._textElement.setAttribute("y", y);
+				this._textElement = new MultiLineText(this.canvas, this.text, x + opt.noteSize, y, "left");
 				polyline2 = createNode("polyline");
 				points2 += (x + this.width) + "," + (y + opt.noteSize) + " ";
 				points2 += (x + this.width - opt.noteSize) + "," + (y + opt.noteSize) + " ";
@@ -915,14 +1000,13 @@
 				this._element = null;
 			}
 			MessageBox.prototype.computeSizeSvg = function() {
-				this._element = createTextSvg(this.canvas, this.text, 0, 0);
-				this.width = this._element.getBBox().width;
-				this.height = this._element.getBBox().height;
+				var bboxText = getSizeOfText(this.canvas, this.text);
+				this.width = bboxText.width;
+				this.height = bboxText.height;
 				return this;
 			};
 			MessageBox.prototype.drawSvg = function(x, y) {
-				this._element.setAttribute("x", x);
-				this._element.setAttribute("y", y);
+				this._element = new MultiLineText(this.canvas, this.text, x, y, "left", this.width, this.height);
 			};
 			function Arrow(canvas, messageElement, actorFrom, actorTo) {
 				this.canvas = canvas;
@@ -1026,11 +1110,9 @@
 			FragmentBox.prototype.computeLabelSizeSvg = function() {
 				var bbox,
 					points = "",
-					typeText;
-				typeText = createTextSvg(this.canvas, this.type, 0, 0);
-				this.typeWidth = typeText.getBBox().width + opt.fragmentMargin * 2;
-				this.typeHeight = typeText.getBBox().height;
-				this.canvas.removeChild(typeText);
+					bboxText = getSizeOfText(this.canvas, this.type);
+				this.typeWidth = bboxText.width + opt.fragmentMargin * 2;
+				this.typeHeight = bboxText.height;
 				this._condition = createTextSvg(this.canvas, this.condition, 0, 0);
 				this.conditionWidth = this._condition.getBBox().width;
 				this.conditionHeight = this._condition.getBBox().height;
