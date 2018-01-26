@@ -21,8 +21,9 @@
 		opt,
 		twoBytesStr = '',
 		TWOBYTES,
-		fragmentId = 10000,
-		noteId = 20000;
+		fragmentId = 100000,
+		noteId = 200000,
+		lifelineId = 300000;
 	defaultOptions = {
 		greekBytes: 2,
 		mathBytes: 2,
@@ -39,6 +40,7 @@
 		fragmentMargin: 8,
 		fragmentNestMargin: 4,
 		fragmentFill: "#BBBBBB",
+		lifelineSize: 4,
 		noteSize: 8
 	};
 	opt = defaultOptions;
@@ -116,6 +118,7 @@
 		this._string = aString;
 		this.markActorNumber = 0;
 		this.markLiveBar = false;
+		this.markLiveBarOffset = -1;
 		this.markTextStart = false;
 		this.markFragment = 0;
 		this.markFragmentEnd = 0;
@@ -125,6 +128,8 @@
 		this.markInvalid = false;
 		this.markSelfPos = false;
 		this.markTextRead = false;
+		this.markLifelineStart = null;
+		this.markLifelineEnd = null;
 	}
 	Cell.prototype.getChar = function() {
 		return this._string;
@@ -151,7 +156,10 @@
 		this.canvas = null;
 		this.scanActor = 0;
 		this.notes = [];
-		this.fragments = [],
+		this.fragments = [];
+		this.messageFromOffset = 0;
+		this.lifelineOffset = 0;
+		this.lifelineStart = [];
 		split = input.split(/\r?\n/);
 		this._xBound = 0;
 		this._yBound = split.length;
@@ -405,20 +413,24 @@
 	};
 	states.scanMessage = function scanMessage(quadro) {
 		var fragment;
-		if(quadro.getProp("markLiveBar") &&
+		if(quadro.check("-", "r") &&
+				quadro.getProp("markLiveBar") &&
 				!quadro.getProp("markFragment") &&
 				!quadro.getProp("markNote") &&
 				!quadro.getProp("markInvalid") &&
-				quadro.check("-", "r")) {
+				!quadro.getProp("markLifelineStart", "r") &&
+				!quadro.getProp("markLifelineEnd", "r")) {
 			quadro.callFrom = quadro.getProp("markActorNumber");
+			quadro.messageFromOffset = quadro.getProp("markLiveBarOffset");
 			quadro.right();
 			return states.scanArrow;
-		} else if(quadro.getProp("markLiveBar") &&
+		} else if(quadro.check("<", "r") &&
+				quadro.getProp("markLiveBar") &&
 				!quadro.getProp("markFragment") &&
 				!quadro.getProp("markNote") &&
-				!quadro.getProp("markInvalid") &&
-				quadro.check("<", "r")) {
+				!quadro.getProp("markInvalid")) {
 			quadro.callFrom = quadro.getProp("markActorNumber");
+			quadro.messageFromOffset = quadro.getProp("markLiveBarOffset");
 			quadro.right();
 			return states.scanResponse;
 		} else if(quadro.check(LABEL_CORNER) &&
@@ -447,6 +459,14 @@
 			return states.resetMarkNoteLeft;
 		} else if(quadro.getProp("markNoteEnd")) {
 			quadro.messageArrows.push(quadro.notes[quadro.getProp("markNote")]);
+			quadro.right();
+			return states.scanMessage;
+		} else if(quadro.getProp("markLifelineStart")) {
+			quadro.messageArrows.push(quadro.getProp("markLifelineStart"));
+			quadro.right();
+			return states.scanMessage;
+		} else if(quadro.getProp("markLifelineEnd")) {
+			quadro.messageArrows.push(quadro.getProp("markLifelineEnd"));
 			quadro.right();
 			return states.scanMessage;
 		} else if(quadro.isInBound()) {
@@ -590,14 +610,22 @@
 		return quadro.returnPosition();
 	};
 	states.scanArrow = function scanArrow(quadro) {
-		var num;
+		var num,
+			message;
 		if(quadro.check(">")) {
 			if(!(num = quadro.getProp("markActorNumber", "r"))) {
 				throw new Error("Parse Error");
 			}
-			quadro.messageArrows.push(new Message(quadro.callFrom, num, trim(quadro.messageText)));
+			message = new Message(
+					quadro.callFrom,
+					num,
+					quadro.messageFromOffset,
+					quadro.getProp("markLiveBarOffset", "r"),
+					trim(quadro.messageText));
+			quadro.messageArrows.push(message);
 			quadro.callFrom = null;
 			quadro.messageText = "";
+			quadro.messageFromOffset = 0;
 			quadro.right();
 			return states.scanMessage;
 		} else if(quadro.check("|", "d") && !quadro.getProp("markLiveBar")) {
@@ -641,6 +669,7 @@
 		return quadro.returnPosition();
 	};
 	states.scanArrowSelf3 = function scanArrowSelf3(quadro) {
+		var message;
 		while(!(quadro.getProp("markLiveBar", "l") && quadro.check("<"))) {
 			if(!quadro.isInBound()) {
 				throw new Error("Parse Error");
@@ -649,15 +678,29 @@
 		}
 		quadro.setProp("markInvalid", true);
 		quadro.left().setProp("markInvalid", true);
-		quadro.messageArrows.push(new Message(quadro.callFrom, quadro.callFrom, trim(quadro.messageText)));
+		message = new Message(
+				quadro.callFrom,
+				quadro.callFrom,
+				quadro.messageFromOffset,
+				quadro.getProp("markLiveBarOffset"),
+				trim(quadro.messageText));
+		quadro.messageArrows.push(message);
 		quadro.callFrom = null;
 		quadro.messageText = "";
+		quadro.messageFromOffset = 0;
 		return quadro.returnPosition();
 	};
 	states.scanResponse = function scanResponse(quadro) {
-		var num;
+		var num,
+			response;
 		if(quadro.check("|") && (num = quadro.getProp("markActorNumber"))) {
-			quadro.messageArrows.push(new Response(quadro.callFrom, num, trim(quadro.messageText)));
+			response = new Response(
+					quadro.callFrom,
+					num,
+					quadro.messageFromOffset,
+					quadro.getProp("markLiveBarOffset"),
+					trim(quadro.messageText));
+			quadro.messageArrows.push();
 			quadro.callFrom = null;
 			quadro.messageText = "";
 			return states.scanMessage;
@@ -753,26 +796,100 @@
 		}
 	};
 	states.scanLine = function scanLine(quadro) {
-		if(quadro.isInBound()) {
+		var lifeline;
+		if(quadro.check("-") &&
+				quadro.check(LABEL_CORNER, "l") &&
+				quadro.check(LABEL_CORNER, "r") &&
+				quadro.getProp("markLifelineStart") === null &&
+				quadro.getProp("markLifelineEnd") === null) {
+			lifeline = new LifelineStart(quadro.actorNumber, quadro.lifelineOffset);
+			quadro.lifelineStart.unshift(lifeline);
+			quadro.setProp("markLifelineStart", lifeline);
+			quadro.pushPosition(states.scanLine, "d");
+			return states.scanLifeline;
+		} else if(quadro.isInBound()) {
 			quadro.setProp("markActorNumber", quadro.actorNumber);
 			quadro.setProp("markLiveBar", true);
+			quadro.setProp("markLiveBarOffset", 0);
 			quadro.down();
 			return states.scanLine;
 		} else {
+			quadro.lifelineStart.shift();
 			return quadro.returnPosition();
+		}
+	};
+	states.scanLifeline = function scanLifeline(quadro) {
+		quadro.pushPosition(states.scanLifelineRight, "r");
+		return states.scanLifelineLeft;
+	};
+	states.scanLifelineLeft = function scanLifelineLeft(quadro) {
+		if(quadro.check("-") &&
+				quadro.check(LABEL_CORNER, "l") &&
+				quadro.check(LABEL_CORNER, "r") &&
+				quadro.getProp("markLifelineStart") === null &&
+				quadro.getProp("markLifelineEnd") === null) {
+			quadro.lifelineOffset++;
+			quadro.setProp("markLifelineEnd", new LifelineEnd(quadro.lifelineStart[0]));
+			return quadro.returnPosition();
+		} else if(quadro.isInBound()) {
+			quadro.setProp("markActorNumber", quadro.actorNumber, "l");
+			quadro.setProp("markLiveBar", true, "l");
+			quadro.setProp("markLiveBarOffset", quadro.lifelineOffset - 1, "l");
+			quadro.down();
+			return states.scanLifelineLeft;
+		} else {
+			throw new Error("Parse Error");
+		}
+	};
+	states.scanLifelineRight = function scanLifelineRight(quadro) {
+		var lifeline;
+		if(quadro.check("-") &&
+				quadro.check(LABEL_CORNER, "l") &&
+				quadro.check(LABEL_CORNER, "r") &&
+				quadro.getProp("markLifelineStart") === null &&
+				quadro.getProp("markLifelineEnd") === null) {
+			lifeline = new LifelineStart(quadro.actorNumber, quadro.lifelineOffset);
+			quadro.lifelineStart.unshift(lifeline);
+			quadro.setProp("markLifelineStart", lifeline);
+			quadro.pushPosition(states.scanLifelineRight, "d");
+			return states.scanLifeline;
+		} else if(quadro.getProp("markLifelineEnd", "l") !== null) {
+			quadro.lifelineOffset--;
+			quadro.lifelineStart.shift();
+			return quadro.returnPosition();
+		} else if(quadro.isInBound()) {
+			quadro.setProp("markActorNumber", quadro.actorNumber);
+			quadro.setProp("markLiveBar", true);
+			quadro.setProp("markLiveBarOffset", quadro.lifelineOffset);
+			quadro.down();
+			return states.scanLifelineRight;
+		} else {
+			throw new Error("Parse Error");
 		}
 	};
 	function Actor() {
 		this.labelName = "";
 	}
-	function Message(callFrom, callTo, message) {
+	function LifelineStart(actorNumber, offset) {
+		this.actorNumber = actorNumber;
+		this.offset = offset;
+		this.id = ++lifelineId;
+	}
+	function LifelineEnd(lifelineStart) {
+		this.lifelineStart = lifelineStart;
+	}
+	function Message(callFrom, callTo, offsetFrom, offsetTo, message) {
 		this.callFrom = callFrom;
 		this.callTo = callTo;
+		this.offsetFrom = offsetFrom;
+		this.offsetTo = offsetTo;
 		this.message = message;
 	}
-	function Response(callFrom, callTo, message) {
+	function Response(callFrom, callTo, offsetFrom, offsetTo, message) {
 		this.callFrom = callFrom;
 		this.callTo = callTo;
+		this.offsetFrom = offsetFrom;
+		this.offsetTo = offsetTo;
 		this.message = message;
 	}
 	function Note(startX, endX, text) {
@@ -897,6 +1014,7 @@
 				this.width = null;
 				this.height = null;
 				this.xLifeline = null;
+				this.lifelines = [];
 				this._text = null;
 				this._box = null;
 			}
@@ -936,8 +1054,16 @@
 				this._box.setAttribute("x", x);
 				this._box.setAttribute("y", y);
 			};
+			ActorBox.prototype.addLifeline = function(depth, lifeline) {
+				if(!this.lifelines[depth]) {
+					this.lifelines[depth] = [];
+				}
+				this.lifelines[depth].push(lifeline);
+			};
 			ActorBox.prototype.drawLifelineSvg = function(y) {
-				var lifeline;
+				var lifeline,
+					i,
+					j;
 				lifeline = createNode("line");
 				lifeline.setAttribute("x1", this.xLifeline);
 				lifeline.setAttribute("y1", this.y + this.height);
@@ -946,6 +1072,29 @@
 				lifeline.setAttribute("stroke", opt.stroke);
 				this.height = y - this.y;
 				this.canvas.appendChild(lifeline);
+				for(i = 0; i < this.lifelines.length; i++) {
+					for(j = 0; j < this.lifelines[i].length; j++) {
+						this.lifelines[i][j].drawSvg();
+					}
+				}
+			};
+			function LifelineBox(canvas) {
+				this.canvas = canvas;
+				this.x = null;
+				this.y = null;
+				this.width = null;
+				this.height = null;
+			};
+			LifelineBox.prototype.drawSvg = function() {
+				var box;
+				box = createNode("rect");
+				box.setAttribute("x", this.x);
+				box.setAttribute("y", this.y);
+				box.setAttribute("fill", "white");
+				box.setAttribute("stroke", opt.stroke);
+				box.setAttribute("width", this.width);
+				box.setAttribute("height", this.height);
+				this.canvas.appendChild(box);
 			};
 			function NoteBox(canvas, text) {
 				this.canvas = canvas;
@@ -1008,50 +1157,60 @@
 			MessageBox.prototype.drawSvg = function(x, y) {
 				this._element = new MultiLineText(this.canvas, this.text, x, y, "left", this.width, this.height);
 			};
-			function Arrow(canvas, messageElement, actorFrom, actorTo) {
+			function Arrow(canvas, messageElement, actorFrom, actorTo, offsetFrom, offsetTo) {
 				this.canvas = canvas;
 				this.messageElement = messageElement;
 				this.actorFrom = actorFrom;
 				this.actorTo = actorTo;
+				this.offsetFrom = offsetFrom;
+				this.offsetTo = offsetTo;
 				this.x = null;
 				this.y = null;
+				this.yArrow = null;
 			}
+			Arrow.prototype.isSelf = function() {
+				return this.actorFrom === this.actorTo;
+			};
 			Arrow.prototype.drawSvg = function(y) {
 				var arrow,
 					arrowHead,
+					toX,
 					toPosX,
 					toPosY,
 					points1 = "",
 					points2 = "";
-				this.x = this.actorFrom.xLifeline;
+				this.x = this.actorFrom.xLifeline + this.offsetFrom * opt.lifelineSize;
 				this.y = y - this.messageElement.height;
+				this.yArrow = y;
 				this.messageElement.drawSvg(this.actorFrom.xLifeline + opt.arrowMargin, this.y);
 				arrowHead = createNode("polygon");
 				if(this.actorFrom !== this.actorTo) {
+					toX = this.actorTo.xLifeline + this.offsetTo * opt.lifelineSize;
 					arrow = createNode("line");
-					arrow.setAttribute("x1", this.actorFrom.xLifeline);
+					arrow.setAttribute("x1", this.x);
 					arrow.setAttribute("y1", y);
-					arrow.setAttribute("x2", this.actorTo.xLifeline);
+					arrow.setAttribute("x2", toX);
 					arrow.setAttribute("y2", y);
 					arrow.setAttribute("stroke", opt.stroke);
-					points2 += this.actorTo.xLifeline + "," + y + " ";
-					points2 += (this.actorTo.xLifeline - opt.arrowSize) + "," + (y - opt.arrowSize / 2) + " ";
-					points2 += (this.actorTo.xLifeline - opt.arrowSize) + "," + (y + opt.arrowSize / 2);
+					points2 += toX + "," + y + " ";
+					points2 += (toX - opt.arrowSize) + "," + (y - opt.arrowSize / 2) + " ";
+					points2 += (toX - opt.arrowSize) + "," + (y + opt.arrowSize / 2);
 				} else {
+					toX = this.actorFrom.xLifeline + this.offsetTo * opt.lifelineSize;
 					arrow = createNode("polyline");
-					toPosX = this.actorFrom.xLifeline + opt.boxMargin * 2;
+					toPosX = toX + opt.boxMargin * 2;
 					toPosY = y + opt.boxMargin;
-					points1 += this.actorFrom.xLifeline + "," + y + " ";
+					points1 += this.x + "," + y + " ";
 					points1 += toPosX + "," + y + " ";
 					points1 += toPosX + "," + toPosY + " ";
-					points1 += this.actorFrom.xLifeline + "," + (y + opt.boxMargin);
+					points1 += toX + "," + toPosY;
 					arrow.setAttribute("fill", "none");
 					arrow.setAttribute("points", points1);
 					arrow.setAttribute("stroke", opt.stroke);
 					arrowHead = createNode("polygon");
-					points2 += this.actorFrom.xLifeline + "," + toPosY + " ";
-					points2 += (this.actorFrom.xLifeline + opt.arrowSize) + "," + (toPosY - opt.arrowSize / 2) + " ";
-					points2 += (this.actorFrom.xLifeline + opt.arrowSize) + "," + (toPosY + opt.arrowSize / 2);
+					points2 += toX + "," + toPosY + " ";
+					points2 += (toX + opt.arrowSize) + "," + (toPosY - opt.arrowSize / 2) + " ";
+					points2 += (toX + opt.arrowSize) + "," + (toPosY + opt.arrowSize / 2);
 				}
 				arrowHead.setAttribute("points", points2);
 				arrowHead.setAttribute("fill", opt.fill);
@@ -1059,11 +1218,13 @@
 				this.canvas.appendChild(arrow);
 				this.canvas.appendChild(arrowHead);
 			};
-			function ResponseArrow(canvas, messageElement, actorFrom, actorTo) {
+			function ResponseArrow(canvas, messageElement, actorFrom, actorTo, offsetFrom, offsetTo) {
 				this.canvas = canvas;
 				this.messageElement = messageElement;
 				this.actorFrom = actorFrom;
 				this.actorTo = actorTo;
+				this.offsetFrom = offsetFrom;
+				this.offsetTo = offsetTo;
 				this.x = null;
 				this.y = null;
 			}
@@ -1151,7 +1312,8 @@
 				this._type.setAttribute("y", this.y);
 			};
 			function drawSequenceDiagram(quadro) {
-				var canvas,
+				var UNDETERMINED = -100000,
+					canvas,
 					actorBoxes = [],
 					objects = [],
 					objectRef = {},
@@ -1171,6 +1333,7 @@
 					yMargin,
 					msgheight,
 					fragmentMargin,
+					arrowSelf,
 					i,
 					j,
 					k,
@@ -1230,12 +1393,24 @@
 								obj = new MessageBox(canvas, trim(part.message));
 								obj.computeSizeSvg();
 								xNext = max(xNext, obj.width);
-								objects[j][k] = new Arrow(canvas, obj, actorBoxes[part.callFrom], actorBoxes[part.callTo]);
+								objects[j][k] = new Arrow(
+										canvas,
+										obj,
+										actorBoxes[part.callFrom],
+										actorBoxes[part.callTo],
+										part.offsetFrom,
+										part.offsetTo);
 							} else if(part instanceof Response && i === part.callFrom) {
 								obj = new MessageBox(canvas, trim(part.message));
 								obj.computeSizeSvg();
 								xNext = max(xNext, obj.width);
-								objects[j][k] = new ResponseArrow(canvas, obj, actorBoxes[part.callFrom], actorBoxes[part.callTo]);
+								objects[j][k] = new ResponseArrow(
+										canvas,
+										obj,
+										actorBoxes[part.callFrom],
+										actorBoxes[part.callTo],
+										part.offsetFrom,
+										part.offsetTo);
 							} else if(part instanceof FragmentStart && i === part.startX) {
 								obj = objects[j][k] = new FragmentBox(canvas, trim(part.type), trim(part.condition));
 								obj.computeLabelSizeSvg();
@@ -1253,6 +1428,10 @@
 									end: part.endX + 1,
 									width: obj.width
 								});
+							} else if(part instanceof LifelineStart && i === part.actorNumber) {
+								obj = objects[j][k] = new LifelineBox(canvas);
+								actorBoxes[i].addLifeline(part.offset, obj);
+								xNext = max(xNext, part.offset * opt.lifelineSize + opt.boxMargin);
 							}
 						}
 					}
@@ -1273,9 +1452,9 @@
 				y += yNext;
 				yMargin = opt.boxMargin;
 				for(j = 0; j < quadro.messageArrowsList.length; j++) {
-					y += yMargin;
+					y += yMargin <= UNDETERMINED ? opt.boxMargin : yMargin;
 					yNext = 0;
-					yMargin = opt.boxMargin;
+					yMargin = UNDETERMINED;
 					for(k = 0; k < quadro.messageArrowsList[j].length; k++) {
 						part = quadro.messageArrowsList[j][k];
 						if(part instanceof Message || part instanceof Response) {
@@ -1316,6 +1495,29 @@
 							objectRef[part.id] = objects[j][k];
 						} else if(part instanceof FragmentEnd) {
 							objectRef[part.id].drawSvg(y + opt.boxMargin);
+						} else if(part instanceof LifelineStart) {
+							objectRef[part.id] = objects[j][k];
+							objects[j][k].x = actorBoxes[part.actorNumber].xLifeline + (part.offset - 1) * opt.lifelineSize;
+							objects[j][k].width = opt.lifelineSize * 2;
+							if(objects[j - 1] && !!(arrowSelf = (function() {
+										var m,
+											obj;
+										for(m = 0; m < objects[j - 1].length; m++) {
+											obj = objects[j - 1][m];
+											if(obj instanceof Arrow && obj.isSelf() && obj.actorTo === actorBoxes[part.actorNumber]) {
+												return obj;
+											}
+										}
+										return false;
+									})())) {
+								objects[j][k].y = arrowSelf.yArrow + opt.boxMargin / 2;
+								yMargin = yMargin < -opt.boxMargin ? -opt.boxMargin : yMargin;
+							} else {
+								objects[j][k].y = y;
+							}
+						} else if(part instanceof LifelineEnd) {
+							objectRef[part.lifelineStart.id].height = y - objectRef[part.lifelineStart.id].y;
+							yMargin = yMargin < 0 ? 0 : yMargin;
 						}
 					}
 					y += yNext;
