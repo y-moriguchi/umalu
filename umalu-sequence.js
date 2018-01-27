@@ -133,6 +133,7 @@
 		this.markLiveBarOffset = -1;
 		this.markTextStart = false;
 		this.markFragment = 0;
+		this.markFragmentAlt = 0;
 		this.markFragmentEnd = 0;
 		this.markNote = 0;
 		this.markNoteLeft = 0;
@@ -424,7 +425,8 @@
 		}
 	};
 	states.scanMessage = function scanMessage(quadro) {
-		var fragment;
+		var fragment,
+			alt;
 		if(quadro.check("-", "r") &&
 				quadro.getProp("markLiveBar") &&
 				!quadro.getProp("markFragment") &&
@@ -459,6 +461,12 @@
 			quadro.setProp("markNote", noteId);
 			quadro.pushPosition(states.scanMessage, "r");
 			return states.scanNote;
+		} else if(quadro.getProp("markFragmentAlt")) {
+			alt = quadro.getProp("markFragmentAlt");
+			fragment = quadro.fragments[alt.id];
+			quadro.messageArrows.push(new FragmentAlt(fragment, alt.text));
+			quadro.right();
+			return states.scanMessage;
 		} else if(quadro.getProp("markFragmentEnd")) {
 			fragment = quadro.fragments[quadro.getProp("markFragmentEnd")];
 			quadro.messageArrows.push(new FragmentEnd(fragment));
@@ -504,8 +512,44 @@
 	};
 	states.scanFragment = function scanFragment(quadro) {
 		var scanActor = quadro.scanActor,
-			textState = "INIT",
 			spaceFlag = false;
+		function readText() {
+			var textState = "INIT",
+				result = "";
+			while(!quadro.getProp("markFragment")) {
+				switch(textState) {
+				case "INIT":
+					if(quadro.check(MESSAGE_TEXT) && !quadro.getProp("markLiveBar")) {
+						textState = "TEXT";
+					} else {
+						quadro.right();
+					}
+					break;
+				case "TEXT":
+					if(quadro.check(/\s/) || quadro.getProp("markLiveBar")) {
+						textState = "SPACE";
+					} else {
+						result += quadro.getChar();
+						quadro.setProp("markTextRead", true);
+					}
+					quadro.right();
+					break;
+				case "SPACE":
+					if(quadro.check(/\s/) || quadro.getProp("markLiveBar")) {
+						return result;
+					} else {
+						result += " ";
+						quadro.setProp("markTextRead", true, "l");
+						textState = "TEXT";
+					}
+					break;
+				default:
+					throw new Error("Internal Error");
+				}
+			}
+			quadro.left();
+			return "";
+		}
 		quadro.right();
 		quadro.repeatWhile("-", "r", function(cell) {
 			cell.markFragment = fragmentId;
@@ -527,45 +571,29 @@
 		quadro.setProp("markFragment", fragmentId);
 		quadro.setProp("markFragmentEnd", fragmentId);
 		quadro.up();
-		quadro.repeatWhile("|", "u", function(cell) {
-			cell.markFragment = fragmentId;
-		});
+		while(!quadro.getProp("markFragment")) {
+			quadro.checkInBound();
+			quadro.setProp("markFragment", fragmentId);
+			if(quadro.check(/[~\-]/, "r")) {
+				quadro.right();
+				quadro.repeatUntil(function(cell) { return cell.markFragment; }, "r", function() {});
+				quadro.left();
+				quadro.repeatUntil(function(cell) { return cell.markFragment; }, "l", function(cell) {
+					cell.markFragment = fragmentId;
+				});
+				quadro.down().right();
+				quadro.setProp("markFragmentAlt", { id: fragmentId, text: readText() });
+				quadro.repeatUntil(function(cell) { return cell.markFragment; }, "l", function() {});
+				quadro.up();
+			}
+			quadro.up();
+		}
 		quadro.down().right();
 		quadro.repeatUntil("/", "r", function(cell) {
 			quadro.messageArrows[quadro.messageArrows.length - 1].type += cell.getChar();
 		});
 		quadro.right();
-		outer: while(!quadro.getProp("markFragment")) {
-			switch(textState) {
-			case "INIT":
-				if(quadro.check(MESSAGE_TEXT) && !quadro.getProp("markLiveBar")) {
-					textState = "TEXT";
-				} else {
-					quadro.right();
-				}
-				break;
-			case "TEXT":
-				if(quadro.check(/\s/) || quadro.getProp("markLiveBar")) {
-					textState = "SPACE";
-				} else {
-					quadro.messageArrows[quadro.messageArrows.length - 1].condition += quadro.getChar();
-					quadro.setProp("markTextRead", true);
-				}
-				quadro.right();
-				break;
-			case "SPACE":
-				if(quadro.check(/\s/) || quadro.getProp("markLiveBar")) {
-					break outer;
-				} else {
-					quadro.messageArrows[quadro.messageArrows.length - 1].condition += " ";
-					quadro.setProp("markTextRead", true, "l");
-					textState = "TEXT";
-				}
-				break;
-			default:
-				throw new Error("Internal Error");
-			}
-		}
+		quadro.messageArrows[quadro.messageArrows.length - 1].condition = readText();
 		quadro.repeatUntil(function(cell) { return cell.markFragment; }, "l", function() {});
 		quadro.up().right();
 		return states.scanMessage;
@@ -915,6 +943,12 @@
 		this.startX = startX;
 		this.endX = null;
 		this.id = ++fragmentId;
+	}
+	function FragmentAlt(fragmentStart, text) {
+		this.id = fragmentStart.id;
+		this.text = text;
+		this.startX = fragmentStart.startX;
+		this.endX = fragmentStart.endX;
 	}
 	function FragmentEnd(fragmentStart) {
 		this.id = fragmentStart.id;
@@ -1296,6 +1330,23 @@
 				this.width = endX - startX;
 				this.y = startY;
 			};
+			FragmentBox.prototype.drawAltSvg = function(y, text) {
+				var altLine,
+					altText;
+				altLine = createNode("line");
+				altLine.setAttribute("x1", this.x);
+				altLine.setAttribute("y1", y);
+				altLine.setAttribute("x2", this.x + this.width);
+				altLine.setAttribute("y2", y);
+				altLine.setAttribute("stroke", opt.stroke);
+				altLine.setAttribute("stroke-dasharray", opt.strokeDasharray);
+				this.canvas.appendChild(altLine);
+				if(text) {
+					altText = createTextSvg(this.canvas, text, 0, 0);
+					altText.setAttribute("x", this.x + this.typeWidth + opt.boxMargin * 2);
+					altText.setAttribute("y", y);
+				}
+			};
 			FragmentBox.prototype.drawSvg = function(endY) {
 				var typeBox,
 					points = "";
@@ -1346,6 +1397,7 @@
 					msgheight,
 					fragmentMargin,
 					noteMargin,
+					altTextSize,
 					i,
 					j,
 					k,
@@ -1505,11 +1557,14 @@
 							}
 						} else if(part instanceof Note) {
 							msgheight = objects[j][k].height / 2;
-							yMargin = max(yMargin, msgheight);
+							yMargin = max(yMargin, msgheight + opt.boxMargin);
 						} else if(part instanceof FragmentStart) {
 							msgheight = max(objects[j][k].typeHeight, objects[j][k].conditionHeight);
+						} else if(part instanceof FragmentAlt) {
+							altTextSize = getSizeOfText(canvas, part.text);
+							msgheight = altTextSize.height;
 						} else if(part instanceof FragmentEnd) {
-							msgheight = max(yNext, opt.boxMargin);
+							msgheight = max(yNext, 0);
 						}
 						yNext = max(yNext, msgheight);
 					}
@@ -1537,8 +1592,14 @@
 									actorBoxes[part.endX - 1].xLifeline + opt.boxMargin + fragmentMargin,
 									y);
 							objectRef[part.id] = objects[j][k];
+						} else if(part instanceof FragmentAlt) {
+							observables.push(bind(
+									function(obj, y, text) { obj.drawAltSvg(y, text); },
+									objectRef[part.id],
+									y,
+									part.text));
 						} else if(part instanceof FragmentEnd) {
-							objectRef[part.id].drawSvg(y + opt.boxMargin);
+							observables.push(bind(function(obj, y) { obj.drawSvg(y); }, objectRef[part.id], y));
 						} else if(part instanceof LifelineStart) {
 							objectRef[part.id] = objects[j][k];
 							objects[j][k].x = actorBoxes[part.actorNumber].xLifeline + (part.offset - 1) * opt.lifelineSize;
