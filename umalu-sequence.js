@@ -86,6 +86,18 @@
 		}
 		return res;
 	}
+	function min() {
+		var i,
+			res;
+		for(i = 0; i < arguments.length; i++) {
+			if(i > 0) {
+				res = res > arguments[i] ? arguments[i] : res;
+			} else {
+				res = arguments[i];
+			}
+		}
+		return res;
+	}
 	function bind(func) {
 		var args = Array.prototype.slice.call(arguments, 1);
 		return function() {
@@ -1171,7 +1183,7 @@
 			Arrow.prototype.isSelf = function() {
 				return this.actorFrom === this.actorTo;
 			};
-			Arrow.prototype.drawSvg = function(y) {
+			Arrow.prototype.drawSvg = function(y, yMargin) {
 				var arrow,
 					arrowHead,
 					toX,
@@ -1199,7 +1211,7 @@
 					toX = this.actorFrom.xLifeline + this.offsetTo * opt.lifelineSize;
 					arrow = createNode("polyline");
 					toPosX = toX + opt.boxMargin * 2;
-					toPosY = y + opt.boxMargin;
+					toPosY = y + (this.offsetFrom !== this.offsetTo ? yMargin : opt.boxMargin);
 					points1 += this.x + "," + y + " ";
 					points1 += toPosX + "," + y + " ";
 					points1 += toPosX + "," + toPosY + " ";
@@ -1333,11 +1345,20 @@
 					yMargin,
 					msgheight,
 					fragmentMargin,
-					arrowSelf,
+					noteMargin,
 					i,
 					j,
 					k,
 					l;
+				function getNoteMargin(quadro, j, k) {
+					if(quadro.messageArrowsList[j][k - 1] &&
+							quadro.messageArrowsList[j][k - 1] instanceof Message &&
+							quadro.messageArrowsList[j][k - 1].callFrom === quadro.messageArrowsList[j][k - 1].callTo) {
+						return opt.boxMargin * 2;
+					} else {
+						return 0;
+					}
+				}
 				canvas = quadro.canvas;
 				for(i = 1; i < quadro.actors.length; i++) {
 					actorBoxes[i] = new ActorBox(canvas, trim(quadro.actors[i].labelName));
@@ -1426,7 +1447,7 @@
 								widthsX.push({
 									start: part.startX,
 									end: part.endX + 1,
-									width: obj.width
+									width: obj.width + getNoteMargin(quadro, j, k)
 								});
 							} else if(part instanceof LifelineStart && i === part.actorNumber) {
 								obj = objects[j][k] = new LifelineBox(canvas);
@@ -1448,7 +1469,13 @@
 				for(i = 1; i < quadro.actors.length; i++) {
 					actorBoxes[i].resetXY(xActor[i], y);
 				}
-				x += actorBoxes[i - 1].width + max(opt.boxMargin, widthsX[i] ? widthsX[i].width : 0);
+				x += actorBoxes[i - 1].width / 2;
+				for(j = 0; j < widthsX.length; j++) {
+					if(widthsX[j].end === i) {
+						xNext = max(xNext, widthsX[j].width + opt.boxMargin);
+					}
+				}
+				x += xNext;
 				y += yNext;
 				yMargin = opt.boxMargin;
 				for(j = 0; j < quadro.messageArrowsList.length; j++) {
@@ -1459,7 +1486,21 @@
 						part = quadro.messageArrowsList[j][k];
 						if(part instanceof Message || part instanceof Response) {
 							msgheight = objects[j][k].messageElement.height;
-							if(part.callFrom === part.callTo) {
+							if(part.callFrom !== part.callTo) {
+								yMargin = max(yMargin, opt.boxMargin);
+							} else if(quadro.messageArrowsList[j + 1] && (function() {
+										var m,
+											obj;
+										for(m = 0; m < quadro.messageArrowsList[j + 1].length; m++) {
+											obj = quadro.messageArrowsList[j + 1][m];
+											if(obj instanceof LifelineStart && obj.actorNumber === part.callTo) {
+												return obj;
+											}
+										}
+										return false;
+									})()) {
+								yMargin = max(yMargin, opt.boxMargin);
+							} else {
 								yMargin = max(yMargin, opt.boxMargin * 2);
 							}
 						} else if(part instanceof Note) {
@@ -1480,12 +1521,15 @@
 							fragmentMargin = -opt.fragmentNestMargin;
 						}
 						if(part instanceof Message || part instanceof Response) {
-							objects[j][k].drawSvg(y + yNext);
+							objects[j][k].drawSvg(y + yNext, yMargin);
 						} else if(part instanceof Note) {
+							noteMargin = actorBoxes[part.startX].xLifeline;
+							noteMargin += getNoteMargin(quadro, j, k);
+							noteMargin += opt.boxMargin + opt.fragmentNestMargin + fragmentMargin;
 							observables.push(bind(
 									function(obj, x, y) { obj.drawSvg(x, y); },
 									objects[j][k],
-									actorBoxes[part.startX].xLifeline + opt.boxMargin + opt.fragmentNestMargin + fragmentMargin,
+									noteMargin,
 									y + yNext - objects[j][k].height / 2));
 						} else if(part instanceof FragmentStart) {
 							objects[j][k].setStartSvg(
@@ -1499,22 +1543,8 @@
 							objectRef[part.id] = objects[j][k];
 							objects[j][k].x = actorBoxes[part.actorNumber].xLifeline + (part.offset - 1) * opt.lifelineSize;
 							objects[j][k].width = opt.lifelineSize * 2;
-							if(objects[j - 1] && !!(arrowSelf = (function() {
-										var m,
-											obj;
-										for(m = 0; m < objects[j - 1].length; m++) {
-											obj = objects[j - 1][m];
-											if(obj instanceof Arrow && obj.isSelf() && obj.actorTo === actorBoxes[part.actorNumber]) {
-												return obj;
-											}
-										}
-										return false;
-									})())) {
-								objects[j][k].y = arrowSelf.yArrow + opt.boxMargin / 2;
-								yMargin = yMargin < -opt.boxMargin ? -opt.boxMargin : yMargin;
-							} else {
-								objects[j][k].y = y;
-							}
+							objects[j][k].y = y;
+							yMargin = yMargin < 0 ? 0 : yMargin;
 						} else if(part instanceof LifelineEnd) {
 							objectRef[part.lifelineStart.id].height = y - objectRef[part.lifelineStart.id].y;
 							yMargin = yMargin < 0 ? 0 : yMargin;
