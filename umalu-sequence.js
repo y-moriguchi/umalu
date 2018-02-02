@@ -161,7 +161,9 @@
 		this._positionStack = [];
 		this.actorNumber = 0;
 		this.actors = [];
+		this.objects = [];
 		this.callFrom = null;
+		this.yFrom = null;
 		this.messageArrows = [];
 		this.messageArrowsList = [];
 		this.messageText = "";
@@ -192,9 +194,23 @@
 				}
 			}
 		}
+		this.width = this._xBound;
+		this.height = this._yBound;
 	}
 	Quadro.prototype.getDirection = function() {
 		return this._direction;
+	};
+	Quadro.prototype.getX = function() {
+		return this._x;
+	};
+	Quadro.prototype.getY = function() {
+		return this._y;
+	};
+	Quadro.prototype.getXY = function() {
+		return {
+			x: this._x,
+			y: this._y
+		};
 	};
 	Quadro.prototype.up = function() {
 		this._y = this._y < 0 ? this._y : this._y - 1;
@@ -450,35 +466,22 @@
 		} else if(quadro.check(LABEL_CORNER) &&
 				!quadro.getProp("markActorNumber") &&
 				isFragment(quadro)) {
-			fragment = new FragmentStart(quadro.scanActor + 1);
-			quadro.messageArrows.push(fragment);
+			fragment = new Fragment(quadro.getXY());
+			quadro.objects.push(fragment);
 			quadro.fragments[fragment.id] = fragment;
 			quadro.setProp("markFragment", fragmentId);
 			return states.scanFragment;
 		} else if(quadro.check(LABEL_CORNER) &&
 				!quadro.getProp("markActorNumber") &&
 				isNote(quadro)) {
+			quadro.objects.push(new Note(quadro.getXY()));
 			quadro.setProp("markNote", noteId);
 			quadro.pushPosition(states.scanMessage, "r");
 			return states.scanNote;
 		} else if(quadro.getProp("markFragmentAlt")) {
 			alt = quadro.getProp("markFragmentAlt");
 			fragment = quadro.fragments[alt.id];
-			quadro.messageArrows.push(new FragmentAlt(fragment, alt.text));
-			quadro.right();
-			return states.scanMessage;
-		} else if(quadro.getProp("markFragmentEnd")) {
-			fragment = quadro.fragments[quadro.getProp("markFragmentEnd")];
-			quadro.messageArrows.push(new FragmentEnd(fragment));
-			quadro.right();
-			return states.scanMessage;
-		} else if(quadro.getProp("markNoteLeft") &&
-				quadro.messageArrows[quadro.messageArrows.length - 1] instanceof Message) {
-			quadro.messageArrows.push(quadro.notes[quadro.getProp("markNote")]);
-			quadro.pushPosition(states.scanMessage, "r");
-			return states.resetMarkNoteLeft;
-		} else if(quadro.getProp("markNoteEnd")) {
-			quadro.messageArrows.push(quadro.notes[quadro.getProp("markNote")]);
+			quadro.objects.push(new FragmentAlt(fragment, alt.text, quadro.getY()));
 			quadro.right();
 			return states.scanMessage;
 		} else if(quadro.getProp("markLifelineStart")) {
@@ -512,7 +515,8 @@
 	};
 	states.scanFragment = function scanFragment(quadro) {
 		var scanActor = quadro.scanActor,
-			spaceFlag = false;
+			spaceFlag = false,
+			obj = quadro.objects[quadro.objects.length - 1];
 		function readText() {
 			var textState = "INIT",
 				result = "";
@@ -558,12 +562,12 @@
 			}
 		});
 		quadro.setProp("markFragment", fragmentId);
-		quadro.messageArrows[quadro.messageArrows.length - 1].endX = scanActor + 1;
 		quadro.down();
 		quadro.repeatWhile("|", "d", function(cell) {
 			cell.markFragment = fragmentId;
 		});
 		quadro.setProp("markFragment", fragmentId);
+		obj.setXY2(quadro.getXY());
 		quadro.left();
 		quadro.repeatWhile("-", "l", function(cell) {
 			cell.markFragment = fragmentId;
@@ -590,17 +594,18 @@
 		}
 		quadro.down().right();
 		quadro.repeatUntil("/", "r", function(cell) {
-			quadro.messageArrows[quadro.messageArrows.length - 1].type += cell.getChar();
+			obj.type += cell.getChar();
 		});
 		quadro.right();
-		quadro.messageArrows[quadro.messageArrows.length - 1].condition = readText();
+		obj.condition = readText();
 		quadro.repeatUntil(function(cell) { return cell.markFragment; }, "l", function() {});
 		quadro.up().right();
 		return states.scanMessage;
 	};
 	states.scanNote = function scanNote(quadro) {
 		var scanActor = quadro.scanActor,
-			text = "";
+			text = "",
+			obj = quadro.objects[quadro.objects.length - 1];
 		quadro.right();
 		quadro.repeatWhile("-", "r", function(cell) {
 			cell.markNote = noteId;
@@ -616,6 +621,7 @@
 			cell.markNote = noteId;
 		});
 		quadro.setProp("markNote", noteId);
+		obj.setXY2(quadro.getXY());
 		quadro.left();
 		quadro.repeatWhile("-", "l", function(cell) {
 			cell.markNote = noteId;
@@ -638,7 +644,7 @@
 			text += "\n";
 			quadro.down();
 		}
-		quadro.notes[noteId++] = new Note(quadro.scanActor, scanActor, trim(text));
+		obj.text = trim(text);
 		return quadro.returnPosition();
 	};
 	states.resetMarkNoteLeft = function(quadro) {
@@ -661,14 +667,16 @@
 					num,
 					quadro.messageFromOffset,
 					quadro.getProp("markLiveBarOffset", "r"),
-					trim(quadro.messageText));
-			quadro.messageArrows.push(message);
+					trim(quadro.messageText),
+					quadro.getY());
+			quadro.objects.push(message);
 			quadro.callFrom = null;
 			quadro.messageText = "";
 			quadro.messageFromOffset = 0;
 			quadro.right();
 			return states.scanMessage;
 		} else if(quadro.check("|", "d") && !quadro.getProp("markLiveBar")) {
+			quadro.yFrom = quadro.getY();
 			quadro.pushPosition(states.scanMessage, "r");
 			return states.scanArrowSelf;
 		} else if(quadro.messageText === "" && quadro.check(MESSAGE_TEXT, "u")) {
@@ -723,9 +731,12 @@
 				quadro.callFrom,
 				quadro.messageFromOffset,
 				quadro.getProp("markLiveBarOffset"),
-				trim(quadro.messageText));
-		quadro.messageArrows.push(message);
+				trim(quadro.messageText),
+				quadro.yFrom,
+				quadro.getY());
+		quadro.objects.push(message);
 		quadro.callFrom = null;
+		quadro.yFrom = null;
 		quadro.messageText = "";
 		quadro.messageFromOffset = 0;
 		return quadro.returnPosition();
@@ -739,8 +750,9 @@
 					num,
 					quadro.messageFromOffset,
 					quadro.getProp("markLiveBarOffset"),
-					trim(quadro.messageText));
-			quadro.messageArrows.push();
+					trim(quadro.messageText),
+					quadro.getY());
+			quadro.objects.push(response);
 			quadro.callFrom = null;
 			quadro.messageText = "";
 			return states.scanMessage;
@@ -786,7 +798,7 @@
 	};
 	states.actorInit = function actorInit(quadro) {
 		quadro.actorNumber++;
-		quadro.actors[quadro.actorNumber] = new Actor();
+		quadro.actors[quadro.actorNumber] = new Actor(quadro.getXY());
 		quadro.setProp("markActorNumber", quadro.actorNumber);
 		quadro.turnRight().forward();
 		return states.actorRectangle;
@@ -805,6 +817,9 @@
 			return states.actorRectangle;
 		} else {
 			quadro.setProp("markActorNumber", quadro.actorNumber);
+			if(quadro.getDirection() === DIRECTION_DOWN) {
+				quadro.actors[quadro.actorNumber].setXY2(quadro.getXY());
+			}
 			quadro.turnRight().forward();
 			return states.actorRectangle;
 		}
@@ -842,7 +857,7 @@
 				quadro.check(LABEL_CORNER, "r") &&
 				quadro.getProp("markLifelineStart") === null &&
 				quadro.getProp("markLifelineEnd") === null) {
-			lifeline = new LifelineStart(quadro.actorNumber, quadro.lifelineOffset);
+			lifeline = new LifelineStart(quadro.actorNumber, quadro.lifelineOffset, quadro.getY());
 			quadro.lifelineStart.unshift(lifeline);
 			quadro.setProp("markLifelineStart", lifeline);
 			quadro.pushPosition(states.scanLine, "d");
@@ -869,7 +884,7 @@
 				quadro.getProp("markLifelineStart") === null &&
 				quadro.getProp("markLifelineEnd") === null) {
 			quadro.lifelineOffset++;
-			quadro.setProp("markLifelineEnd", new LifelineEnd(quadro.lifelineStart[0]));
+			quadro.setProp("markLifelineEnd", new LifelineEnd(quadro.lifelineStart[0], quadro.getY()));
 			return quadro.returnPosition();
 		} else if(quadro.isInBound()) {
 			quadro.setProp("markActorNumber", quadro.actorNumber, "l");
@@ -888,7 +903,7 @@
 				quadro.check(LABEL_CORNER, "r") &&
 				quadro.getProp("markLifelineStart") === null &&
 				quadro.getProp("markLifelineEnd") === null) {
-			lifeline = new LifelineStart(quadro.actorNumber, quadro.lifelineOffset);
+			lifeline = new LifelineStart(quadro.actorNumber, quadro.lifelineOffset, quadro.getY());
 			quadro.lifelineStart.unshift(lifeline);
 			quadro.setProp("markLifelineStart", lifeline);
 			quadro.pushPosition(states.scanLifelineRight, "d");
@@ -907,53 +922,72 @@
 			throw new Error("Parse Error");
 		}
 	};
-	function Actor() {
+	function Actor(pos) {
 		this.labelName = "";
+		this.x = pos.x;
+		this.y = pos.y;
+		this.width = null;
+		this.height = null;
 	}
-	function LifelineStart(actorNumber, offset) {
+	Actor.prototype.setXY2 = function(pos) {
+		this.width = pos.x - this.x + 1;
+		this.height = pos.y - this.y + 1;
+	};
+	function LifelineStart(actorNumber, offset, y) {
 		this.actorNumber = actorNumber;
 		this.offset = offset;
 		this.id = ++lifelineId;
+		this.y = y;
 	}
-	function LifelineEnd(lifelineStart) {
+	function LifelineEnd(lifelineStart, y) {
 		this.lifelineStart = lifelineStart;
+		this.y = y;
 	}
-	function Message(callFrom, callTo, offsetFrom, offsetTo, message) {
+	function Message(callFrom, callTo, offsetFrom, offsetTo, message, y, ySelf) {
 		this.callFrom = callFrom;
 		this.callTo = callTo;
 		this.offsetFrom = offsetFrom;
 		this.offsetTo = offsetTo;
 		this.message = message;
+		this.y = y;
+		this.ySelf = ySelf ? ySelf : y;
 	}
-	function Response(callFrom, callTo, offsetFrom, offsetTo, message) {
+	function Response(callFrom, callTo, offsetFrom, offsetTo, message, y) {
 		this.callFrom = callFrom;
 		this.callTo = callTo;
 		this.offsetFrom = offsetFrom;
 		this.offsetTo = offsetTo;
 		this.message = message;
+		this.y = y;
 	}
-	function Note(startX, endX, text) {
-		this.startX = startX;
-		this.endX = endX;
-		this.text = text;
+	function Note(pos) {
+		this.x = pos.x;
+		this.y = pos.y;
+		this.text = "";
 	}
-	function FragmentStart(startX) {
+	Note.prototype.setXY2 = function(pos) {
+		this.width = pos.x - this.x + 1;
+		this.height = pos.y - this.y + 1;
+	};
+	function Fragment(pos) {
 		this.type = "";
 		this.condition = "";
-		this.startX = startX;
-		this.endX = null;
+		this.x = pos.x;
+		this.y = pos.y;
+		this.width = null;
+		this.height = null;
 		this.id = ++fragmentId;
 	}
-	function FragmentAlt(fragmentStart, text) {
-		this.id = fragmentStart.id;
+	Fragment.prototype.setXY2 = function(pos) {
+		this.width = pos.x - this.x + 1;
+		this.height = pos.y - this.y + 1;
+	};
+	function FragmentAlt(fragment, text, y) {
+		this.id = fragment.id;
 		this.text = text;
-		this.startX = fragmentStart.startX;
-		this.endX = fragmentStart.endX;
-	}
-	function FragmentEnd(fragmentStart) {
-		this.id = fragmentStart.id;
-		this.startX = fragmentStart.startX;
-		this.endX = fragmentStart.endX;
+		this.y = y;
+		this.x = fragment.x;
+		this.width = fragment.width;
 	}
 	if(global.window && global.window.document) {
 		(function() {
@@ -1052,44 +1086,37 @@
 					height: y
 				};
 			}
-			function ActorBox(canvas, text) {
+			function ActorBox(canvas, text, x, y, width, height) {
 				this.canvas = canvas;
 				this.text = text;
-				this.x = null;
-				this.y = null;
-				this.width = null;
-				this.height = null;
-				this.xLifeline = null;
+				this.x = x;
+				this.y = y;
+				this.width = width;
+				this.height = height;
+				this.xLifeline = this.x + this.width / 2;
 				this.lifelines = [];
-				this._text = null;
-				this._box = null;
 			}
-			ActorBox.prototype.drawSvg = function(x, y) {
+			ActorBox.prototype.drawSvg = function() {
 				var text,
 					bboxText,
 					box,
 					lifeline;
-				this.x = x;
-				this.y = y;
 				bboxText = getSizeOfText(this.canvas, this.text);
-				this.width = bboxText.width + opt.boxMargin * 2;
-				this.height = bboxText.height + opt.boxMargin * 2;
-				this._box = createNode("rect");
-				this._box.setAttribute("x", x);
-				this._box.setAttribute("y", y);
-				this._box.setAttribute("fill", opt.fill);
-				this._box.setAttribute("stroke", opt.stroke);
-				this._box.setAttribute("width", this.width);
-				this._box.setAttribute("height", this.height);
-				this.canvas.appendChild(this._box);
-				this._text = new MultiLineText(this.canvas,
+				box = createNode("rect");
+				box.setAttribute("x", this.x);
+				box.setAttribute("y", this.y);
+				box.setAttribute("fill", opt.fill);
+				box.setAttribute("stroke", opt.stroke);
+				box.setAttribute("width", this.width);
+				box.setAttribute("height", this.height);
+				this.canvas.appendChild(box);
+				text = new MultiLineText(this.canvas,
 						this.text,
-						x + opt.boxMargin,
-						y + opt.boxMargin,
+						this.x + (this.width - bboxText.width) / 2,
+						this.y + (this.height - bboxText.height) / 2,
 						"center",
 						bboxText.width,
 						bboxText.height);
-				this.xLifeline = this.x + this.width / 2
 			};
 			ActorBox.prototype.resetXY = function(x, y) {
 				this.x = x;
@@ -1142,26 +1169,21 @@
 				box.setAttribute("height", this.height);
 				this.canvas.appendChild(box);
 			};
-			function NoteBox(canvas, text) {
+			function NoteBox(canvas, text, width, height) {
 				this.canvas = canvas;
 				this.text = text;
 				this.x = null;
 				this.y = null;
-				this.width = null;
-				this.height = null;
+				this.width = width;
+				this.height = height;
 				this._textElement = null;
 				this._frameElement = null;
 			}
-			NoteBox.prototype.computeSizeSvg = function() {
-				var bboxText = getSizeOfText(this.canvas, this.text);
-				this.width = bboxText.width + opt.noteSize * 3;
-				this.height = bboxText.height;
-				return this;
-			};
 			NoteBox.prototype.drawSvg = function(x, y) {
 				var polyline2,
 					points1 = "",
-					points2 = "";
+					points2 = "",
+					size;
 				this.x = x;
 				this.y = y;
 				this._frameElement = createNode("polygon");
@@ -1175,7 +1197,13 @@
 				this._frameElement.setAttribute("points", points1);
 				this._frameElement.setAttribute("stroke", opt.stroke);
 				this.canvas.appendChild(this._frameElement);
-				this._textElement = new MultiLineText(this.canvas, this.text, x + opt.noteSize, y, "left");
+				size = getSizeOfText(this.canvas, this.text);
+				this._textElement = new MultiLineText(
+						this.canvas,
+						this.text,
+						x + opt.noteSize,
+						y + (this.height - size.height) / 2,
+						"left");
 				polyline2 = createNode("polyline");
 				points2 += (x + this.width) + "," + (y + opt.noteSize) + " ";
 				points2 += (x + this.width - opt.noteSize) + "," + (y + opt.noteSize) + " ";
@@ -1375,253 +1403,104 @@
 				this._type.setAttribute("y", this.y);
 			};
 			function drawSequenceDiagram(quadro) {
-				var UNDETERMINED = -100000,
-					canvas,
-					actorBoxes = [],
-					objects = [],
-					objectRef = {},
-					part,
+				var canvas,
+					box,
+					actor,
 					obj,
-					widthsX = [],
-					xActor = [],
-					fragmentNest = [],
-					fragmentDepth = [],
-					fragmentMaxDepth = [],
-					observables = [],
-					x = opt.boxMargin,
-					y = opt.boxMargin,
-					xBox,
-					xNext,
-					yNext = 0,
-					yMargin,
-					msgheight,
-					fragmentMargin,
-					noteMargin,
-					altTextSize,
+					draw,
+					actorBoxes = [],
+					fragments = {},
+					part,
+					lifelines = [],
+					objectRef = {},
 					i,
 					j,
-					k,
-					l;
-				function getNoteMargin(quadro, j, k) {
-					if(quadro.messageArrowsList[j][k - 1] &&
-							quadro.messageArrowsList[j][k - 1] instanceof Message &&
-							quadro.messageArrowsList[j][k - 1].callFrom === quadro.messageArrowsList[j][k - 1].callTo) {
-						return opt.boxMargin * 2;
-					} else {
-						return 0;
-					}
-				}
+					k;
 				canvas = quadro.canvas;
+				box = getSizeOfText(canvas, "O");
+				box.centerX = function(x) { return this.width * (x + 0.5); };
+				box.centerY = function(y) { return this.height * (y + 0.5); };
+				box.leftX = function(x) { return this.width * x; };
+				box.topY = function(y) { return this.height * y; };
+				box.rightX = function(x) { return this.width * (x + 1); };
+				box.bottomY = function(y) { return this.height * (y + 1); };
 				for(i = 1; i < quadro.actors.length; i++) {
-					actorBoxes[i] = new ActorBox(canvas, trim(quadro.actors[i].labelName));
-					actorBoxes[i].drawSvg(x, y);
-					yNext = yNext < actorBoxes[i].height ? actorBoxes[i].height : yNext;
+					actorBoxes[i] = new ActorBox(
+							canvas,
+							quadro.actors[i].labelName,
+							box.centerX(quadro.actors[i].x),
+							box.centerY(quadro.actors[i].y),
+							box.leftX(quadro.actors[i].width),
+							box.topY(quadro.actors[i].height));
+					actorBoxes[i].drawSvg();
 				}
 				for(i = 1; i < quadro.actors.length; i++) {
-					if(fragmentMaxDepth[i] === void 0) {
-						fragmentMaxDepth[i] = 0;
-					}
 					for(j = 0; j < quadro.messageArrowsList.length; j++) {
-						fragmentNest[j] = fragmentNest[j] || [];
+						lifelines[j] = lifelines[j] || [];
 						for(k = 0; k < quadro.messageArrowsList[j].length; k++) {
 							part = quadro.messageArrowsList[j][k];
-							if(part instanceof FragmentStart && (i === part.startX || i === part.endX)) {
-								if(!fragmentDepth[i]) {
-									fragmentDepth[i] = {
-										depth: 1,
-										current: 1
-									};
-								} else {
-									fragmentDepth[i].current++;
-									fragmentDepth[i].depth = max(fragmentDepth[i].depth, fragmentDepth[i].current);
-								}
-								fragmentMaxDepth[i] = max(fragmentMaxDepth[i], fragmentDepth[i].depth);
-								fragmentNest[j][k] = {
-									depth: fragmentDepth[i],
-									current: fragmentDepth[i].current
-								};
-							} else if(part instanceof FragmentEnd && (i === part.startX || i === part.endX)) {
-								if(fragmentDepth[i].current > 1) {
-									fragmentDepth[i].current--;
-								} else {
-									fragmentDepth[i] = null;
-								}
-							} else if(fragmentDepth[i] && (i === part.startX || i === part.endX)) {
-								fragmentNest[j][k] = {
-									depth: fragmentDepth[i],
-									current: fragmentDepth[i].current
-								};
+							if(part instanceof LifelineStart && i === part.actorNumber) {
+								lifelines[j][k] = new LifelineBox(canvas);
+								actorBoxes[i].addLifeline(part.offset, lifelines[j][k]);
 							}
 						}
 					}
 				}
-				for(i = 1; i < quadro.actors.length; i++) {
-					xNext = max(actorBoxes[i].width / 2, (fragmentMaxDepth[i] - 1) * opt.fragmentNestMargin + opt.boxMargin);
-					xNext += i > 1 ? actorBoxes[i - 1].width / 2 + opt.boxMargin : 0;
-					for(j = 0; j < quadro.messageArrowsList.length; j++) {
-						objects[j] = objects[j] || [];
-						for(k = 0; k < quadro.messageArrowsList[j].length; k++) {
-							part = quadro.messageArrowsList[j][k];
-							if(part instanceof Message && i === part.callFrom) {
-								obj = new MessageBox(canvas, trim(part.message));
-								obj.computeSizeSvg();
-								xNext = max(xNext, obj.width);
-								objects[j][k] = new Arrow(
-										canvas,
-										obj,
-										actorBoxes[part.callFrom],
-										actorBoxes[part.callTo],
-										part.offsetFrom,
-										part.offsetTo);
-							} else if(part instanceof Response && i === part.callFrom) {
-								obj = new MessageBox(canvas, trim(part.message));
-								obj.computeSizeSvg();
-								xNext = max(xNext, obj.width);
-								objects[j][k] = new ResponseArrow(
-										canvas,
-										obj,
-										actorBoxes[part.callFrom],
-										actorBoxes[part.callTo],
-										part.offsetFrom,
-										part.offsetTo);
-							} else if(part instanceof FragmentStart && i === part.startX) {
-								obj = objects[j][k] = new FragmentBox(canvas, trim(part.type), trim(part.condition));
-								obj.computeLabelSizeSvg();
-								xNext = max(xNext, obj.typeWidth + opt.boxMargin);
-								widthsX.push({
-									start: part.startX,
-									end: part.endX,
-									width: obj.conditionWidth + opt.boxMargin
-								});
-							} else if(part instanceof Note && i === part.startX) {
-								obj = objects[j][k] = new NoteBox(canvas, trim(part.text));
-								obj.computeSizeSvg();
-								widthsX.push({
-									start: part.startX,
-									end: part.endX + 1,
-									width: obj.width + getNoteMargin(quadro, j, k)
-								});
-							} else if(part instanceof LifelineStart && i === part.actorNumber) {
-								obj = objects[j][k] = new LifelineBox(canvas);
-								actorBoxes[i].addLifeline(part.offset, obj);
-								xNext = max(xNext, part.offset * opt.lifelineSize + opt.boxMargin);
-							}
-						}
-					}
-					for(j = 0; j < widthsX.length; j++) {
-						if(widthsX[j].end === i) {
-							xNext = max(xNext, widthsX[j].width + opt.boxMargin * 2);
-						} else if(widthsX[j].start < i && widthsX[j].end > i) {
-							widthsX[j].width -= xNext;
-						}
-					}
-					x += xNext - actorBoxes[i].width / 2 + (i > 1 ? actorBoxes[i - 1].width / 2 : 0);
-					xActor[i] = x;
-				}
-				for(i = 1; i < quadro.actors.length; i++) {
-					actorBoxes[i].resetXY(xActor[i], y);
-				}
-				x += actorBoxes[i - 1].width / 2;
-				for(j = 0; j < widthsX.length; j++) {
-					if(widthsX[j].end === i) {
-						xNext = max(xNext, widthsX[j].width + opt.boxMargin);
-					}
-				}
-				x += xNext;
-				y += yNext;
-				yMargin = opt.boxMargin;
 				for(j = 0; j < quadro.messageArrowsList.length; j++) {
-					y += yMargin <= UNDETERMINED ? opt.boxMargin : yMargin;
-					yNext = 0;
-					yMargin = UNDETERMINED;
 					for(k = 0; k < quadro.messageArrowsList[j].length; k++) {
 						part = quadro.messageArrowsList[j][k];
-						if(part instanceof Message || part instanceof Response) {
-							msgheight = objects[j][k].messageElement.height;
-							if(part.callFrom !== part.callTo) {
-								yMargin = max(yMargin, opt.boxMargin);
-							} else if(quadro.messageArrowsList[j + 1] && (function() {
-										var m,
-											obj;
-										for(m = 0; m < quadro.messageArrowsList[j + 1].length; m++) {
-											obj = quadro.messageArrowsList[j + 1][m];
-											if(obj instanceof LifelineStart && obj.actorNumber === part.callTo) {
-												return obj;
-											}
-										}
-										return false;
-									})()) {
-								yMargin = max(yMargin, opt.boxMargin);
-							} else {
-								yMargin = max(yMargin, opt.boxMargin * 2);
-							}
-						} else if(part instanceof Note) {
-							msgheight = objects[j][k].height / 2;
-							yMargin = max(yMargin, msgheight + opt.boxMargin);
-						} else if(part instanceof FragmentStart) {
-							msgheight = max(objects[j][k].typeHeight, objects[j][k].conditionHeight);
-						} else if(part instanceof FragmentAlt) {
-							altTextSize = getSizeOfText(canvas, part.text);
-							msgheight = altTextSize.height;
-						} else if(part instanceof FragmentEnd) {
-							msgheight = max(yNext, 0);
-						}
-						yNext = max(yNext, msgheight);
-					}
-					for(k = 0; k < quadro.messageArrowsList[j].length; k++) {
-						part = quadro.messageArrowsList[j][k];
-						if(fragmentNest[j][k]) {
-							fragmentMargin = opt.fragmentNestMargin * (fragmentNest[j][k].depth.depth - fragmentNest[j][k].current);
-						} else {
-							fragmentMargin = -opt.fragmentNestMargin;
-						}
-						if(part instanceof Message || part instanceof Response) {
-							objects[j][k].drawSvg(y + yNext, yMargin);
-						} else if(part instanceof Note) {
-							noteMargin = actorBoxes[part.startX].xLifeline;
-							noteMargin += getNoteMargin(quadro, j, k);
-							noteMargin += opt.boxMargin + opt.fragmentNestMargin + fragmentMargin;
-							observables.push(bind(
-									function(obj, x, y) { obj.drawSvg(x, y); },
-									objects[j][k],
-									noteMargin,
-									y + yNext - objects[j][k].height / 2));
-						} else if(part instanceof FragmentStart) {
-							objects[j][k].setStartSvg(
-									actorBoxes[part.startX].xLifeline - objects[j][k].typeWidth - opt.boxMargin - fragmentMargin,
-									actorBoxes[part.endX - 1].xLifeline + opt.boxMargin + fragmentMargin,
-									y);
-							objectRef[part.id] = objects[j][k];
-						} else if(part instanceof FragmentAlt) {
-							observables.push(bind(
-									function(obj, y, text) { obj.drawAltSvg(y, text); },
-									objectRef[part.id],
-									y,
-									part.text));
-						} else if(part instanceof FragmentEnd) {
-							observables.push(bind(function(obj, y) { obj.drawSvg(y); }, objectRef[part.id], y));
-						} else if(part instanceof LifelineStart) {
-							objectRef[part.id] = objects[j][k];
-							objects[j][k].x = actorBoxes[part.actorNumber].xLifeline + (part.offset - 1) * opt.lifelineSize;
-							objects[j][k].width = opt.lifelineSize * 2;
-							objects[j][k].y = y;
-							yMargin = yMargin < 0 ? 0 : yMargin;
+						if(part instanceof LifelineStart) {
+							objectRef[part.id] = lifelines[j][k];
+							lifelines[j][k].x = actorBoxes[part.actorNumber].xLifeline + (part.offset - 1) * opt.lifelineSize;
+							lifelines[j][k].width = opt.lifelineSize * 2;
+							lifelines[j][k].y = box.topY(part.y);
 						} else if(part instanceof LifelineEnd) {
-							objectRef[part.lifelineStart.id].height = y - objectRef[part.lifelineStart.id].y;
-							yMargin = yMargin < 0 ? 0 : yMargin;
+							objectRef[part.lifelineStart.id].height = box.bottomY(part.y) - objectRef[part.lifelineStart.id].y;
 						}
 					}
-					y += yNext;
 				}
-				y += opt.boxMargin * 2;
 				for(i = 1; i < quadro.actors.length; i++) {
-					actorBoxes[i].drawLifelineSvg(y);
+					actorBoxes[i].drawLifelineSvg(box.bottomY(quadro.height));
 				}
-				for(i = 0; i < observables.length; i++) {
-					observables[i]();
+				for(i = 0; i < quadro.objects.length; i++) {
+					obj = quadro.objects[i];
+					if(obj instanceof Message) {
+						draw = new Arrow(
+								canvas,
+								new MessageBox(canvas, trim(obj.message)).computeSizeSvg(),
+								actorBoxes[obj.callFrom],
+								actorBoxes[obj.callTo],
+								obj.offsetFrom,
+								obj.offsetTo);
+						draw.drawSvg(box.bottomY(obj.y), box.topY(obj.ySelf) - box.bottomY(obj.y));
+					} else if(obj instanceof Response) {
+						draw = new ResponseArrow(
+								canvas,
+								new MessageBox(canvas, trim(obj.message)).computeSizeSvg(),
+								actorBoxes[obj.callFrom],
+								actorBoxes[obj.callTo],
+								obj.offsetFrom,
+								obj.offsetTo);
+						draw.drawSvg(box.bottomY(obj.y));
+					} else if(obj instanceof Fragment) {
+						draw = new FragmentBox(canvas, obj.type, obj.condition);
+						draw.computeLabelSizeSvg();
+						draw.setStartSvg(
+								box.centerX(obj.x),
+								box.centerX(obj.x) + box.leftX(obj.width),
+								box.centerY(obj.y));
+						draw.drawSvg(box.centerY(obj.y) + box.centerY(obj.height - 1));
+						fragments[obj.id] = draw;
+					} else if(obj instanceof FragmentAlt) {
+						draw = fragments[obj.id];
+						draw.drawAltSvg(box.centerY(obj.y), obj.text);
+					} else if(obj instanceof Note) {
+						draw = new NoteBox(canvas, obj.text, box.leftX(obj.width), box.topY(obj.height));
+						draw.drawSvg(box.centerX(obj.x), box.centerY(obj.y));
+					}
 				}
-				quadro.canvas.setAttribute("width", x + opt.boxMargin);
-				quadro.canvas.setAttribute("height", y + opt.boxMargin);
+				quadro.canvas.setAttribute("width", box.rightX(quadro.width));
+				quadro.canvas.setAttribute("height", box.bottomY(quadro.height));
 			}
 			function replaceChildNode(node, text) {
 				var result,
